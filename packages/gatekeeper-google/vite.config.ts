@@ -1,3 +1,21 @@
-// Vite+ per-package settings. Shared by all gatekeepers with a configurator UI and living beside the
-// builder it runs; `withTests` is that config plus the shared vitest `test` task.
-export { withTests as default } from '../../scripts/gatekeeper-configurator-vite-config.js'
+import gatekeeperConfiguratorConfig from "../../scripts/gatekeeper-configurator-vite-config.js";
+import { withVitestTask } from "../../scripts/vitest-task-vite-config.js";
+
+const config = withVitestTask(gatekeeperConfiguratorConfig, [
+  "vitest run",
+  "vitest run -c vitest.worker.config.ts",
+]);
+
+export default {
+  ...config,
+  run: {
+    ...config.run,
+    tasks: {
+      ...config.run?.tasks,
+      build: {
+        ...gatekeeperConfiguratorConfig.run.tasks.build,
+        command: ["tsc", "tsc -p tsconfig.test.json"],
+      },
+    },
+  },
+};
