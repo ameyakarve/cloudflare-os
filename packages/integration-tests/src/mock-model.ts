@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AiChatAuthorInfo, AiModelConfig } from "@gadgets/workshop-shared/api";
 import type { Handler } from "./network-interceptor.js";
 
 const CHAT_COMPLETIONS_SUFFIX = "/chat/completions";
@@ -13,13 +14,29 @@ function isQuickTitleRequest(body: unknown): boolean {
   return parsed.success && parsed.data.messages[0].content.startsWith(QUICK_TITLE_MARKER);
 }
 
+export const SCRIPTED_MODEL_ID = "@cf/zai-org/glm-5.2";
+export const SCRIPTED_MODEL_PROFILE: AiChatAuthorInfo = {
+  type: "agent",
+  id: SCRIPTED_MODEL_ID,
+  name: "Scripted model",
+};
+export const SCRIPTED_MODEL_CONFIG: AiModelConfig = {
+  provider: "cloudflare",
+  model: SCRIPTED_MODEL_ID,
+  accountId: "test-account",
+  apiToken: "test-token",
+};
+
 type ToolCall = {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
 };
 
-export type ChatCompletionStep = { text: string } | { toolCall: ToolCall };
+type StreamedCompletionStep = { text: string } | { toolCall: ToolCall };
+export type ChatCompletionStep = StreamedCompletionStep |
+  { error: { status: number; message: string } } |
+  { pending: true };
 
 export type ScriptedChatCompletions = {
   handler: Handler;
@@ -32,7 +49,7 @@ function event(data: unknown): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-function stream(step: ChatCompletionStep, index: number): Response {
+function stream(step: StreamedCompletionStep, index: number): Response {
   const base = {
     id: `mock-completion-${index}`,
     object: "chat.completion.chunk",
@@ -86,6 +103,10 @@ export function scriptedChatCompletions(script: readonly ChatCompletionStep[])
       requests.push(body);
       const step = steps.shift();
       if (step === undefined) throw new Error("The fake model received more requests than scripted");
+      if ("pending" in step) return new Promise<Response>(() => {});
+      if ("error" in step) {
+        return new Response(step.error.message, { status: step.error.status });
+      }
       return stream(step, responseIndex++);
     },
   };
