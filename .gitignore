@@ -16,6 +16,8 @@ packages/workshop-backend/src/generated/browser-export-page.js
 # TypeScript build info
 *.tsbuildinfo
 
+# run-local build cache stamp
+.run-local-stamp
 
 # Cloudflare Workers
 .wrangler
