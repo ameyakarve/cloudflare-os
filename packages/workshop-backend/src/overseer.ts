@@ -8828,6 +8828,12 @@ export class GatekeeperLoopback extends WorkerEntrypoint<Cloudflare.Env, Gatekee
   getLink(...args: any[]): Promise<any> {
     return this.session.getLink(...args);
   }
+  createLink(...args: any[]): Promise<any> {
+    return this.session.createLink(...args);
+  }
+  updateLink(...args: any[]): Promise<any> {
+    return this.session.updateLink(...args);
+  }
   getLinkPerformance(...args: any[]): Promise<any> {
     return this.session.getLinkPerformance(...args);
   }
