@@ -8764,6 +8764,9 @@ type BindingLoopbackTarget = {
  * so a rename should be safe.
  */
 export class GatekeeperLoopback extends WorkerEntrypoint<Cloudflare.Env, GatekeeperLoopbackProps> {
+  // Native RPC promises support promise pipelining (method calls before the target resolves).
+  private readonly session: any;
+
   constructor(ctx: ExecutionContext<GatekeeperLoopbackProps>, env: Cloudflare.Env) {
     super(ctx, env);
 
@@ -8774,12 +8777,15 @@ export class GatekeeperLoopback extends WorkerEntrypoint<Cloudflare.Env, Gatekee
     // @ts-ignore: LSP-only RPC types bug, "type instantiation is excessively deep"
     let session = stub.startGatekeeperSession(
         this.ctx.props.target, this.ctx.props.caller);
+    this.session = session;
 
-    return new Proxy(session, {
+    return new Proxy(this, {
       get(target, prop, receiver) {
-        // Note: We need `target` to be used as the receiver. If we use `receiver` as the receiver,
-        //   we'll get an illegal invocation, as `receiver` points to our Proxy.
-        return Reflect.get(target, prop, target);
+        // Methods declared on this entrypoint must stay visible so current Workers runtimes include
+        // them in the service binding's static RPC surface. Everything else retains the original
+        // generic forwarding behavior for built-in and third-party gatekeepers.
+        if (Reflect.has(target, prop)) return Reflect.get(target, prop, target);
+        return Reflect.get(session, prop, session);
       },
       getPrototypeOf(target) {
         return WorkerEntrypoint.prototype;
@@ -8792,6 +8798,54 @@ export class GatekeeperLoopback extends WorkerEntrypoint<Cloudflare.Env, Gatekee
    * and so the loopback binding won't be created.
    */
   dummyMethodToWorkAroundValidatorBug() {}
+
+  // Explicit forwarding for the deployment's curated gatekeepers. Workerd currently derives a
+  // WorkerEntrypoint service binding's callable RPC surface from declared methods before the
+  // constructor-returned Proxy can supply dynamic properties. Without these declarations the
+  // generated execute-code env receives a Fetcher, but calls such as env.BOOKS.searchLedger() and
+  // env.AFFILIATE.getOverview() fail with "Illegal invocation".
+  getOrganization(...args: any[]): Promise<any> {
+    return this.session.getOrganization(...args);
+  }
+  getFinancialSnapshot(...args: any[]): Promise<any> {
+    return this.session.getFinancialSnapshot(...args);
+  }
+  listAccounts(...args: any[]): Promise<any> {
+    return this.session.listAccounts(...args);
+  }
+  searchLedger(...args: any[]): Promise<any> {
+    return this.session.searchLedger(...args);
+  }
+  analyzeCashfreeBatch(...args: any[]): Promise<any> {
+    return this.session.analyzeCashfreeBatch(...args);
+  }
+  postCashfreeBatch(...args: any[]): Promise<any> {
+    return this.session.postCashfreeBatch(...args);
+  }
+  previewJournal(...args: any[]): Promise<any> {
+    return this.session.previewJournal(...args);
+  }
+  postJournal(...args: any[]): Promise<any> {
+    return this.session.postJournal(...args);
+  }
+  getOverview(...args: any[]): Promise<any> {
+    return this.session.getOverview(...args);
+  }
+  listLinks(...args: any[]): Promise<any> {
+    return this.session.listLinks(...args);
+  }
+  getLink(...args: any[]): Promise<any> {
+    return this.session.getLink(...args);
+  }
+  getLinkPerformance(...args: any[]): Promise<any> {
+    return this.session.getLinkPerformance(...args);
+  }
+  getClickSeries(...args: any[]): Promise<any> {
+    return this.session.getClickSeries(...args);
+  }
+  getTrafficBreakdown(...args: any[]): Promise<any> {
+    return this.session.getTrafficBreakdown(...args);
+  }
 }
 
 type GatekeeperHookLoopbackProps = {
