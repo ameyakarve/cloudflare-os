@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withGadgetKumo } from "../src/gadget-kumo";
+import { upgradeLegacyGadgetClient, withGadgetKumo } from "../src/gadget-kumo";
 import {
   assertGadgetBindingsAvailable,
   missingGadgetBindings,
@@ -38,5 +38,18 @@ describe("Gadget Kumo runtime", () => {
     const bundle = withGadgetKumo(legacy);
     expect(bundle).toContain("globalThis.Kumo = Kumo");
     expect(bundle).not.toContain('style.dataset.kumo = "2.9.2"');
+  });
+
+  it("upgrades the saved pre-Kumo Award Explorer snapshot", () => {
+    const legacy = `
+const { h, page, hero, row, button, input, select, field, card, badge, notice, empty, loading, mount } = Kumo;
+mount(page({}, hero({
+  description: "Compare published programme pricing across schedule-backed direct and one-stop routes."
+})));
+`;
+    const modern = "const { Button } = Kumo; GadgetUI.mount(React.createElement(Button));";
+    expect(upgradeLegacyGadgetClient(legacy, modern)).toBe(modern);
+    expect(upgradeLegacyGadgetClient("const { h, page } = Kumo;", modern))
+      .toBe("const { h, page } = Kumo;");
   });
 });
