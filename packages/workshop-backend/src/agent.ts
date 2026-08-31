@@ -488,7 +488,7 @@ document.body.appendChild(document.createTextNode(greeting));
 
 Every client has React and the real Cloudflare \`@cloudflare/kumo\` component library preloaded.
 \`React\` exposes \`createElement\`, \`Fragment\`, and the standard hooks. \`Kumo\` exposes \`Badge\`,
-\`Banner\`, \`Button\`, \`Combobox\`, \`Empty\`, \`Field\`, \`Grid\`, \`Input\`, \`LayerCard\`, \`Loader\`,
+\`Banner\`, \`Button\`, \`Collapsible\`, \`Combobox\`, \`Empty\`, \`Field\`, \`Grid\`, \`Input\`, \`LayerCard\`, \`Loader\`,
 \`Select\`, \`Surface\`, \`Tabs\`, \`Text\`, and \`cn\`. Render once with \`GadgetUI.mount(node)\`.
 These are React components: use React prop names such as \`onClick\` and \`className\`. Kumo's
 standalone stylesheet is already loaded. Use Kumo semantic classes such as \`bg-kumo-base\` and
