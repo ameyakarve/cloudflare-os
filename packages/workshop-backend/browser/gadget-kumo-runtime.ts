@@ -27,40 +27,11 @@ import {
   cn,
 } from "@cloudflare/kumo";
 
-declare global {
-  // Gadget client code is an unbundled ES module, so the platform provides its UI dependencies as
-  // globals. These are deliberately the real React/Kumo exports, not platform reimplementations.
-  var React: Readonly<{
-    Fragment: typeof Fragment;
-    createElement: typeof createElement;
-    useCallback: typeof useCallback;
-    useEffect: typeof useEffect;
-    useMemo: typeof useMemo;
-    useRef: typeof useRef;
-    useState: typeof useState;
-  }>;
-  var Kumo: Readonly<{
-    Badge: typeof Badge;
-    Banner: typeof Banner;
-    Button: typeof Button;
-    Combobox: typeof Combobox;
-    Empty: typeof Empty;
-    Field: typeof Field;
-    Grid: typeof Grid;
-    Input: typeof Input;
-    LayerCard: typeof LayerCard;
-    Loader: typeof Loader;
-    Select: typeof Select;
-    Surface: typeof Surface;
-    Tabs: typeof Tabs;
-    Text: typeof Text;
-    cn: typeof cn;
-  }>;
-  var kumo: typeof Kumo;
-  var GadgetUI: Readonly<{ mount(node: ReactNode): Root }>;
-}
+// Gadget client code is an unbundled ES module, so the platform provides its UI dependencies as
+// globals. These are deliberately the real React/Kumo exports, not platform reimplementations.
+const runtimeGlobal = globalThis as typeof globalThis & Record<string, unknown>;
 
-globalThis.React = Object.freeze({
+runtimeGlobal.React = Object.freeze({
   Fragment,
   createElement,
   useCallback,
@@ -70,7 +41,7 @@ globalThis.React = Object.freeze({
   useState,
 });
 
-globalThis.Kumo = Object.freeze({
+runtimeGlobal.Kumo = Object.freeze({
   Badge,
   Banner,
   Button,
@@ -87,12 +58,12 @@ globalThis.Kumo = Object.freeze({
   Text,
   cn,
 });
-globalThis.kumo = globalThis.Kumo;
+runtimeGlobal.kumo = runtimeGlobal.Kumo;
 
 document.documentElement.style.colorScheme = "light dark";
 document.body.classList.add("bg-kumo-canvas", "text-kumo-default");
 
-globalThis.GadgetUI = Object.freeze({
+runtimeGlobal.GadgetUI = Object.freeze({
   mount(node: ReactNode): Root {
     const root = createRoot(document.body);
     root.render(node);
