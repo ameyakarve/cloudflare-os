@@ -29,9 +29,13 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@cloudflare/kumo": "^2.9.2",
     "@cloudflare/vitest-pool-workers": "catalog:",
+    "@phosphor-icons/react": "^2.1.10",
     "dompurify": "^3.4.13",
     "esbuild": "^0.28.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"

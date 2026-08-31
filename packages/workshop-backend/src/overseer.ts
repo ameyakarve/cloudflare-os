@@ -48,7 +48,7 @@ import {
 } from "./chat-attachment-validation";
 import { renderGadgetInBrowser } from "./browser-export";
 import { assertGadgetBindingsAvailable } from "./gadget-dependencies";
-import { withGadgetKumoRuntime } from "@gadgets/workshop-shared/gadget-kumo";
+import { withGadgetKumo } from "./gadget-kumo";
 import {
   defaultExportFormats,
   exportServerFormat,
@@ -2558,7 +2558,7 @@ class OverseerImpl implements AgentHooks {
     }
 
     let file = ydoc.getMap<Y.Text>(this.gadgetRootName(gadgetId)).get("client.js");
-    return file ? {jsCode: withGadgetKumoRuntime(file.toString())} : null;
+    return file ? {jsCode: withGadgetKumo(file.toString())} : null;
   }
 
   async getGadgetExportFormats(gadgetId: WorkpieceId, chatId?: number)

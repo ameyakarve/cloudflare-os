@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  GADGET_KUMO_RUNTIME,
-  withGadgetKumoRuntime,
-} from "@gadgets/workshop-shared/gadget-kumo";
+import { KUMO_RUNTIME, KUMO_STYLES, withGadgetKumo } from "./gadget-kumo";
 import {
   assertGadgetBindingsAvailable,
   missingGadgetBindings,
@@ -30,15 +27,13 @@ describe("Gadget binding preflight", () => {
 });
 
 describe("Gadget Kumo runtime", () => {
-  it("is valid JavaScript and exposes the compact UI surface", () => {
-    expect(() => new Function(GADGET_KUMO_RUNTIME)).not.toThrow();
-    for (const helper of ["page", "hero", "field", "card", "notice", "loading", "mount"]) {
-      expect(GADGET_KUMO_RUNTIME).toContain(`${helper}:`);
-    }
-    expect(GADGET_KUMO_RUNTIME).toContain("globalThis.Kumo = Kumo");
-    const client = "const { h, page, mount } = Kumo; if (!h || !page || !mount) throw new Error();";
-    const bundle = withGadgetKumoRuntime(client);
-    expect(bundle.indexOf("globalThis.Kumo = Kumo")).toBeLessThan(bundle.indexOf("const { h"));
-    expect(() => new Function(bundle)).not.toThrow();
+  it("bundles the real React component library and its standalone styles", () => {
+    expect(KUMO_RUNTIME.length).toBeGreaterThan(100_000);
+    expect(KUMO_STYLES).toContain("--color-kumo-brand");
+    expect(KUMO_STYLES).toContain(".bg-kumo-base");
+    const client = "const { Button, Input, Surface } = Kumo; const { createElement } = React;";
+    const bundle = withGadgetKumo(client);
+    expect(bundle.indexOf('style.dataset.kumo = "2.9.2"')).toBeLessThan(bundle.indexOf(client));
+    expect(bundle.indexOf(KUMO_RUNTIME.slice(0, 100))).toBeLessThan(bundle.indexOf(client));
   });
 });

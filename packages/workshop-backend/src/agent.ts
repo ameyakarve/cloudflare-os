@@ -486,15 +486,18 @@ let greeting = await gadget.greet("World");
 document.body.appendChild(document.createTextNode(greeting));
 \`\`\`
 
-Every client has a platform-owned, responsive Kumo UI runtime preloaded as both \`Kumo\` and
-\`kumo\`. Prefer its \`h\`, \`page\`, \`hero\`, \`row\`, \`grid\`, \`field\`, \`input\`,
-\`select\`, \`button\`, \`card\`, \`badge\`, \`notice\`, \`empty\`, \`loading\`, and \`mount\`
-helpers. Do not copy a CSS reset, design system, or DOM factory into client.js. Keep Gadget code
-focused on its data and interactions; use custom CSS only for a domain-specific visualization.
+Every client has React and the real Cloudflare \`@cloudflare/kumo\` component library preloaded.
+\`React\` exposes \`createElement\`, \`Fragment\`, and the standard hooks. \`Kumo\` exposes \`Badge\`,
+\`Banner\`, \`Button\`, \`Combobox\`, \`Empty\`, \`Field\`, \`Grid\`, \`Input\`, \`LayerCard\`, \`Loader\`,
+\`Select\`, \`Surface\`, \`Tabs\`, \`Text\`, and \`cn\`. Render once with \`GadgetUI.mount(node)\`.
+These are React components: use React prop names such as \`onClick\` and \`className\`. Kumo's
+standalone stylesheet is already loaded. Use Kumo semantic classes such as \`bg-kumo-base\` and
+\`text-kumo-subtle\`; never invent a palette, copy a CSS reset/design system, or write a DOM factory.
+Keep client.js focused on data and interactions. Custom CSS is only for a domain visualization.
 
-For example: \`const { page, hero, button, mount } = Kumo; mount(page({},
-hero({ title: "Hello" }, button("Run", { variant: "primary", onclick: run }))));\` Helpers accept
-DOM nodes as children; \`h(tag, props, ...children)\` covers anything without a convenience helper.
+For example: \`const { createElement: h } = React; const { Button, Surface, Text } = Kumo;
+function App() { return h(Surface, { className: "p-4" }, h(Text, { variant: "heading1", as: "h1" },
+"Hello"), h(Button, { variant: "primary", onClick: run }, "Run")); } GadgetUI.mount(h(App));\`
 
 Note that there is no index.html. Instead, client.js must build the entire UI using JavaScript code.
 

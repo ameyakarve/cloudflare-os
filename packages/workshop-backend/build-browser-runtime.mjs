@@ -7,6 +7,8 @@ const packageDir = dirname(fileURLToPath(import.meta.url));
 const runtimeOutputFile = resolve(packageDir, "src/generated/browser-export-runtime.txt");
 const sanitizerOutputFile = resolve(packageDir, "src/generated/html-sanitizer-runtime.txt");
 const pageOutputFile = resolve(packageDir, "src/generated/browser-export-page.js");
+const kumoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-kumo-runtime.txt");
+const kumoStylesOutputFile = resolve(packageDir, "src/generated/gadget-kumo-styles.txt");
 
 const runtimeResult = await build({
   entryPoints: [resolve(packageDir, "browser/browser-export-runtime.ts")],
@@ -34,10 +36,24 @@ const sanitizerResult = await build({
   minify: true,
   write: false,
 });
+const kumoRuntimeResult = await build({
+  entryPoints: [resolve(packageDir, "browser/gadget-kumo-runtime.ts")],
+  bundle: true,
+  format: "iife",
+  platform: "browser",
+  target: "es2025",
+  minify: true,
+  write: false,
+});
 
 writeIfChanged(runtimeOutputFile, runtimeResult.outputFiles[0].contents);
 writeIfChanged(sanitizerOutputFile, sanitizerResult.outputFiles[0].contents);
 writeIfChanged(pageOutputFile, pageResult.outputFiles[0].contents);
+writeIfChanged(kumoRuntimeOutputFile, kumoRuntimeResult.outputFiles[0].contents);
+writeIfChanged(
+  kumoStylesOutputFile,
+  readFileSync(fileURLToPath(import.meta.resolve("@cloudflare/kumo/styles/standalone"))),
+);
 
 function writeIfChanged(outputFile, bytes) {
   const contents = new TextDecoder().decode(bytes);
