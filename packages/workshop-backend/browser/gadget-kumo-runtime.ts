@@ -1,13 +1,5 @@
-import {
-  Fragment,
-  createElement,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import * as React from "react";
+import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
   Badge,
@@ -29,17 +21,9 @@ import {
 
 // Gadget client code is an unbundled ES module, so the platform provides its UI dependencies as
 // globals. These are deliberately the real React/Kumo exports, not platform reimplementations.
-const runtimeGlobal = globalThis as typeof globalThis & Record<string, unknown>;
+const runtimeGlobal = globalThis as unknown as Record<string, unknown>;
 
-runtimeGlobal.React = Object.freeze({
-  Fragment,
-  createElement,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-});
+runtimeGlobal.React = React;
 
 runtimeGlobal.Kumo = Object.freeze({
   Badge,
