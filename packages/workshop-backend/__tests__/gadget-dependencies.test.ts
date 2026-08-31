@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { KUMO_RUNTIME, KUMO_STYLES, withGadgetKumo } from "./gadget-kumo";
+import { withGadgetKumo } from "../src/gadget-kumo";
 import {
   assertGadgetBindingsAvailable,
   missingGadgetBindings,
   referencedGadgetBindings,
-} from "./gadget-dependencies";
+} from "../src/gadget-dependencies";
 
 describe("Gadget binding preflight", () => {
   it("finds dot, bracket, and destructured env dependencies", () => {
@@ -27,13 +27,16 @@ describe("Gadget binding preflight", () => {
 });
 
 describe("Gadget Kumo runtime", () => {
-  it("bundles the real React component library and its standalone styles", () => {
-    expect(KUMO_RUNTIME.length).toBeGreaterThan(100_000);
-    expect(KUMO_STYLES).toContain("--color-kumo-brand");
-    expect(KUMO_STYLES).toContain(".bg-kumo-base");
+  it("loads the real runtime before a modern Gadget client", () => {
     const client = "const { Button, Input, Surface } = Kumo; const { createElement } = React;";
     const bundle = withGadgetKumo(client);
     expect(bundle.indexOf('style.dataset.kumo = "2.9.2"')).toBeLessThan(bundle.indexOf(client));
-    expect(bundle.indexOf(KUMO_RUNTIME.slice(0, 100))).toBeLessThan(bundle.indexOf(client));
+  });
+
+  it("keeps the old helper ABI isolated to saved legacy Gadgets", () => {
+    const legacy = "const { h, page, hero, mount } = Kumo; mount(page({}, hero({title: 'Saved'})));";
+    const bundle = withGadgetKumo(legacy);
+    expect(bundle).toContain("globalThis.Kumo = Kumo");
+    expect(bundle).not.toContain('style.dataset.kumo = "2.9.2"');
   });
 });

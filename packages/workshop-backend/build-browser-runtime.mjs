@@ -45,15 +45,24 @@ const kumoRuntimeResult = await build({
   minify: true,
   write: false,
 });
+const kumoRuntimeBytes = kumoRuntimeResult.outputFiles[0].contents;
+const kumoStylesBytes = readFileSync(fileURLToPath(import.meta.resolve("@cloudflare/kumo/styles/standalone")));
+assertContains(kumoRuntimeBytes, ".Kumo=Object.freeze", "Kumo browser runtime");
+assertContains(kumoRuntimeBytes, "Button:", "Kumo browser runtime");
+assertContains(kumoStylesBytes, "--color-kumo-brand", "Kumo standalone styles");
+assertContains(kumoStylesBytes, ".bg-kumo-base", "Kumo standalone styles");
 
 writeIfChanged(runtimeOutputFile, runtimeResult.outputFiles[0].contents);
 writeIfChanged(sanitizerOutputFile, sanitizerResult.outputFiles[0].contents);
 writeIfChanged(pageOutputFile, pageResult.outputFiles[0].contents);
-writeIfChanged(kumoRuntimeOutputFile, kumoRuntimeResult.outputFiles[0].contents);
-writeIfChanged(
-  kumoStylesOutputFile,
-  readFileSync(fileURLToPath(import.meta.resolve("@cloudflare/kumo/styles/standalone"))),
-);
+writeIfChanged(kumoRuntimeOutputFile, kumoRuntimeBytes);
+writeIfChanged(kumoStylesOutputFile, kumoStylesBytes);
+
+function assertContains(bytes, marker, label) {
+  if (!new TextDecoder().decode(bytes).includes(marker)) {
+    throw new Error(`${label} is missing expected marker: ${marker}`);
+  }
+}
 
 function writeIfChanged(outputFile, bytes) {
   const contents = new TextDecoder().decode(bytes);
