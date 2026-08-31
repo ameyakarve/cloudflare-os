@@ -44,6 +44,10 @@ export const COMPACTION_SYSTEM_PROMPT = `Generate a single context handoff that 
 
 Preserve exact user requirements and preferences, key decisions and rationale, files and symbols, errors and resolutions, current work state, and the next concrete step. Fully integrate any prior context summary instead of referring to it separately.
 
+Do not present cached binding API descriptions or Gadget binding lists as current truth. Mark them
+historical and tell the continuing agent to re-describe external bindings and trust the fresh system
+prompt's Gadget binding list after compaction.
+
 Use this structure:
 ## Goal
 ## Constraints & Preferences

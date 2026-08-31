@@ -47,6 +47,8 @@ import {
   validateChatAttachmentUpload,
 } from "./chat-attachment-validation";
 import { renderGadgetInBrowser } from "./browser-export";
+import { assertGadgetBindingsAvailable } from "./gadget-dependencies";
+import { withGadgetKumoRuntime } from "@gadgets/workshop-shared/gadget-kumo";
 import {
   defaultExportFormats,
   exportServerFormat,
@@ -686,6 +688,12 @@ const AGENT_RESPONSE_DELIVERED_RETENTION_MS = 24 * 60 * 60 * 1000;
 function stringifyError(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
+  if (typeof err === "object" && err !== null) {
+    const message = Reflect.get(err, "message");
+    if (typeof message === "string" && message) return message;
+    const cause = Reflect.get(err, "cause");
+    if (cause !== undefined && cause !== err) return stringifyError(cause);
+  }
   try {
     return JSON.stringify(err);
   } catch {
@@ -2397,6 +2405,12 @@ class OverseerImpl implements AgentHooks {
         }
       }
 
+      const gadget = this.getGadgetRecord(gadgetId);
+      const loaderEnv = this.getEnvForLoader(
+        gadgetId, {from: "gadget", chatId, gadgetId}, chatId,
+      ) as Record<string, unknown>;
+      assertGadgetBindingsAvailable(gadget.title, modules["server.js"] ?? "", Object.keys(loaderEnv));
+
       let tailProps: GadgetTailLoopbackProps = {
         chatId,
         gadgetId,
@@ -2412,7 +2426,7 @@ class OverseerImpl implements AgentHooks {
         ],
         mainModule: "server.js",
         modules,
-        env: this.getEnvForLoader(gadgetId, {from: "gadget", chatId, gadgetId}, chatId),
+        env: loaderEnv,
         globalOutbound: null,
 
         // TODO: Switch to streaming tails when the workerd log spam issue is fixed.
@@ -2507,20 +2521,17 @@ class OverseerImpl implements AgentHooks {
         return (...args: any[]) => {
           let result: Promise<any> = Reflect.apply(method, target, args);
           return result.catch((err: any) => {
-            let msg = err;
-            if (err instanceof Error) {
-              // Sadly the caught errors are missing any useful stack at the moment. Perhaps if
-              // we at least specify the method that was called it's somewhat useful to the agent.
-              msg = `${err}\n    at ${prop}()`;
-            }
+            // Cross-Worker errors are not always instanceof Error. Normalize and re-wrap them so
+            // both the console and RPC caller receive the useful message rather than bare "Error".
+            const wrapped = new Error(`${stringifyError(err)}\n    at ${String(prop)}()`);
 
             let event: ConsoleLogEvent = {
               timestamp: new Date(),
               level: "error",
-              message: [msg],
+              message: [wrapped.toString()],
             };
             self.deliverGadgetLogs(chatId ?? null, [event]);
-            throw err;
+            throw wrapped;
           });
         }
       },
@@ -2547,7 +2558,7 @@ class OverseerImpl implements AgentHooks {
     }
 
     let file = ydoc.getMap<Y.Text>(this.gadgetRootName(gadgetId)).get("client.js");
-    return file ? {jsCode: file.toString()} : null;
+    return file ? {jsCode: withGadgetKumoRuntime(file.toString())} : null;
   }
 
   async getGadgetExportFormats(gadgetId: WorkpieceId, chatId?: number)

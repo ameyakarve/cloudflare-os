@@ -30,6 +30,10 @@
     "./theme": {
       "types": "./src/theme.ts",
       "import": "./src/theme.ts"
+    },
+    "./gadget-kumo": {
+      "types": "./src/gadget-kumo.ts",
+      "import": "./src/gadget-kumo.ts"
     }
   },
   "scripts": {

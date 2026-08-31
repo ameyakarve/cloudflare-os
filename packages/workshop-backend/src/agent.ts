@@ -486,6 +486,16 @@ let greeting = await gadget.greet("World");
 document.body.appendChild(document.createTextNode(greeting));
 \`\`\`
 
+Every client has a platform-owned, responsive Kumo UI runtime preloaded as both \`Kumo\` and
+\`kumo\`. Prefer its \`h\`, \`page\`, \`hero\`, \`row\`, \`grid\`, \`field\`, \`input\`,
+\`select\`, \`button\`, \`card\`, \`badge\`, \`notice\`, \`empty\`, \`loading\`, and \`mount\`
+helpers. Do not copy a CSS reset, design system, or DOM factory into client.js. Keep Gadget code
+focused on its data and interactions; use custom CSS only for a domain-specific visualization.
+
+For example: \`const { page, hero, button, mount } = Kumo; mount(page({},
+hero({ title: "Hello" }, button("Run", { variant: "primary", onclick: run }))));\` Helpers accept
+DOM nodes as children; \`h(tag, props, ...children)\` covers anything without a convenience helper.
+
 Note that there is no index.html. Instead, client.js must build the entire UI using JavaScript code.
 
 Make Gadget UIs responsive and usable on both desktop and phones by default.
@@ -686,11 +696,15 @@ List the blueprints available to the user: their own published blueprints, their
 `.trim();
 
 let WRITE_FILE_TOOL_DESCRIPTION = `
-Write a complete file, creating it if it doesn't exist, or replacing it if it does.
+Write a complete file, creating it if it doesn't exist, or replacing it if it does. Keep client.js
+compact by using the preloaded Kumo runtime; do not embed a design system or DOM factory.
 `.trim();
 
 let EDIT_FILE_TOOL_DESCRIPTION = `
 Edit content of a file. If you need to edit multiple places in a file or across multiple files, you should issue multiple tool calls simultaneously, rather than in series.
+
+The replacement must match the latest observed file exactly. If an edit reports no match, reread
+the file before retrying; do not guess at increasingly broad replacements.
 `.trim();
 
 let WEBFETCH_TOOL_DESCRIPTION = `
@@ -726,6 +740,10 @@ Describe one of the bindings in your \`env\` (as used with the \`executeCode\` t
 Sometimes user messages may contain text like \`[Resource Title](env.SOME_NAME)\`. This means the user has granted you access to an external resource, available in your \`env\` under that name. Describe it with this tool before using it.
 
 IMPORTANT: The objects found in \`env\` most likely do NOT implement any API you are familiar with from your training. DO NOT try to guess what API they implement, and DO NOT use executeCode to try to enumerate them programmatically (this will not work, as they are RPC interfaces). Use the describeBinding tool to learn what interface they provide before writing any code.
+
+Descriptions copied into a compacted conversation are historical. After compaction, describe a
+binding again before calling it or writing code against it. Prefer documented high-level batch
+operations over compatibility methods or hand-written pagination.
 `.trim();
 
 let SET_GADGET_BINDING_TOOL_DESCRIPTION = `
@@ -734,6 +752,10 @@ Wire a resource from your \`env\` into a Gadget's own \`env\`, so the Gadget's c
 The bindings in your \`env\` belong to this chat; a Gadget's code sees only the Gadget's own bindings, which are listed in the system prompt. Use this tool to add one of your bindings to a Gadget: \`gadget\` names the target Gadget (by its name in your env), \`source\` names the resource binding to wire in, and \`name\` is the name the Gadget's code will see it as (\`env.<name>\` in server.js), defaulting to the same name as \`source\`.
 
 The addition is part of your proposed changes: like code edits, it takes permanent effect when the user accepts your changes.
+
+Before testing a Gadget, inspect server.js for every \`this.env.<NAME>\` dependency and wire all of
+them. The binding list in the current system prompt is authoritative. A missing binding is a setup
+error; never catch it and return empty domain data.
 
 NOTE: You do NOT need this tool to use a resource yourself with \`executeCode\` — your own bindings are already available there. ONLY use it when a Gadget's code needs the resource.
 `.trim();
@@ -2288,7 +2310,10 @@ export async function runAgent(
               `how the ${info.output.noun} itself works (its editor, layout, or features).`);
         }
         if (info.bindings.length == 0) {
-          lines.push(`This gadget has no bindings.`);
+          lines.push(
+              `This gadget has no bindings. This is authoritative: every external ` +
+              `\`this.env.<NAME>\` reference in server.js is missing until setGadgetBinding ` +
+              `adds it.`);
         } else {
           // For each of the gadget's own bindings, cross-reference how the agent can reach the
           // same resource in its own env (matched by target workpiece), if it can.
@@ -2335,6 +2360,11 @@ export async function runAgent(
       instanceInstructions
           ? `${SYSTEM_PROMPT}\n\n${instanceInstructions}`
           : SYSTEM_PROMPT,
+      (checkpoint
+          ? "This chat was compacted. Binding API details in the handoff are historical; call " +
+            "describeBinding again before using each external binding. The current Gadget " +
+            "binding lists below are authoritative.\n\n"
+          : "") +
       (standardFormats ? `${standardFormats}\n\n` : "") +
           `${systemPromptWorkspace}${systemPromptConnections}` +
           (alwaysAvailableResourcesPrompt ? `\n\n${alwaysAvailableResourcesPrompt}` : ""),
