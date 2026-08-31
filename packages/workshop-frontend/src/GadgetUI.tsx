@@ -3,6 +3,8 @@ import { Text, Loader, Banner } from '@cloudflare/kumo'
 import { Sparkle } from '@phosphor-icons/react'
 import { RpcStub, RpcTarget, newMessagePortRpcSession } from 'capnweb'
 import { GadgetClient, ConsoleLogEvent } from '@gadgets/workshop-shared/api'
+import { useTheme } from './ThemeContext'
+import type { ResolvedThemeMode } from './theme'
 
 // We want to inject Cap'n Web into the Gadget. Luckily it has no dependencies, so we can just take
 // the whole module and embed it. We can import the module using ?raw to get a string of the
@@ -68,6 +70,18 @@ window.addEventListener('keydown', (event) => {
   }
 }, true);
 
+// The iframe has an opaque origin and cannot read parent DOM state. Workshop sends its resolved
+// light/dark mode explicitly so Kumo tokens and native controls stay in sync without reloading.
+const applyGadgetTheme = (mode) => {
+  if (mode !== 'light' && mode !== 'dark') return;
+  document.documentElement.dataset.mode = mode;
+  document.documentElement.style.colorScheme = mode;
+};
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent || event.data?.type !== 'gadget-theme') return;
+  applyGadgetTheme(event.data.mode);
+});
+
 window.addEventListener('click', (event) => {
   if (!(event.target instanceof Element)) {
     return;
@@ -102,9 +116,9 @@ window.addEventListener('unhandledrejection', (event) => {
 
 `);
 
-const createSandboxedHtml = (jsCode: string): string => {
+const createSandboxedHtml = (jsCode: string, theme: ResolvedThemeMode): string => {
   return `<!DOCTYPE html>
-<html>
+<html data-mode="${theme}" style="color-scheme: ${theme}">
 <head>
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src 'none'; script-src data: 'unsafe-inline'; style-src data: 'unsafe-inline'; img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none';">
 </head>
@@ -132,10 +146,11 @@ const UI_BUNDLE_LOAD_TIMEOUT_MS = 20_000
 const RECONNECT_TIMEOUT_MS = 5_000
 
 export default function GadgetUI(props: GadgetUIProps) {
-  return <GadgetUISession key={props.chatId} {...props} />
+  const { resolvedThemeMode } = useTheme()
+  return <GadgetUISession key={props.chatId} {...props} resolvedThemeMode={resolvedThemeMode} />
 }
 
-function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chatId, onConsoleLog, onIframeEscape }: GadgetUIProps) {
+function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chatId, onConsoleLog, onIframeEscape, resolvedThemeMode }: GadgetUIProps & { resolvedThemeMode: ResolvedThemeMode }) {
   const [sandboxedHtml, setSandboxedHtml] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -143,6 +158,8 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
   const [isInvalidated, setIsInvalidated] = useState(false)
   const [iframeGeneration, setIframeGeneration] = useState(0)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const resolvedThemeModeRef = useRef(resolvedThemeMode)
+  resolvedThemeModeRef.current = resolvedThemeMode
   const prevReloadTriggerRef = useRef(reloadTrigger)
   // Identifies the newest bundle load, so an older one can't write state after being superseded.
   const loadGenerationRef = useRef(0)
@@ -293,7 +310,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
         const bundle = await gadget.getUiBundle(chatId)
         if (!isCurrent()) return
         if (bundle) {
-          const html = createSandboxedHtml(bundle.jsCode)
+          const html = createSandboxedHtml(bundle.jsCode, resolvedThemeModeRef.current)
           setSandboxedHtml(html)
         } else {
           setSandboxedHtml(null)
@@ -321,6 +338,13 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
   // LSP reports an error here, but tsc does not.
   // The LSP error is due to bugs that need to be fixed in Cap'n Web.
   }, [gadget, isVisible, hasLoaded, isInvalidated, chatId, retryNonce])
+
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage({
+      type: 'gadget-theme',
+      mode: resolvedThemeMode,
+    }, '*')
+  }, [resolvedThemeMode, sandboxedHtml, iframeGeneration])
 
   // Effect to handle iframe RPC handshake
   useEffect(() => {
@@ -501,6 +525,10 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
         }}
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         title="Gadget UI"
+        onLoad={() => iframeRef.current?.contentWindow?.postMessage({
+          type: 'gadget-theme',
+          mode: resolvedThemeModeRef.current,
+        }, '*')}
       />
     </div>
   )

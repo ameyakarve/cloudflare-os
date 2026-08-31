@@ -46,7 +46,8 @@ runtimeGlobal.Kumo = Object.freeze({
 });
 runtimeGlobal.kumo = runtimeGlobal.Kumo;
 
-document.documentElement.style.colorScheme = "light dark";
+const initialMode = document.documentElement.dataset.mode;
+document.documentElement.style.colorScheme = initialMode === "dark" ? "dark" : "light";
 document.body.classList.add("bg-kumo-canvas", "text-kumo-default");
 
 runtimeGlobal.GadgetUI = Object.freeze({

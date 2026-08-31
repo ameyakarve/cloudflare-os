@@ -24,6 +24,11 @@ vi.mock('@cloudflare/kumo', () => ({
   Text: ({ children }: { children: ReactNode }) => children,
 }))
 
+const themeMock = vi.hoisted(() => ({ resolvedThemeMode: 'light' as 'light' | 'dark' }))
+vi.mock('./ThemeContext', () => ({
+  useTheme: () => ({ resolvedThemeMode: themeMock.resolvedThemeMode }),
+}))
+
 import GadgetUI from './GadgetUI'
 
 interface TestGadget {
@@ -156,6 +161,7 @@ describe('GadgetUI RPC recovery', () => {
   const childSessions: RpcStub<TestGadget>[] = []
 
   beforeEach(() => {
+    themeMock.resolvedThemeMode = 'light'
     container = document.createElement('div')
     document.body.append(container)
     root = createRoot(container)
@@ -175,6 +181,26 @@ describe('GadgetUI RPC recovery', () => {
     dispatchIframeHandshake(iframe, port2)
     return child
   }
+
+  it('passes the resolved theme into the iframe and updates it without reloading', async () => {
+    const gadget = fakeGadget('themed', 'document.body.textContent = "themed"')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    const iframe = container.querySelector('iframe')!
+    expect(iframe.srcdoc).toContain('<html data-mode="light" style="color-scheme: light">')
+    expect(iframe.srcdoc).toContain('gadget-theme')
+
+    const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage')
+    themeMock.resolvedThemeMode = 'dark'
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+
+    expect(container.querySelector('iframe')).toBe(iframe)
+    expect(postMessage).toHaveBeenCalledWith({ type: 'gadget-theme', mode: 'dark' }, '*')
+  })
 
   it('keeps the iframe while redirecting calls to the replacement gadget client', async () => {
     const first = fakeGadget('first', 'document.body.textContent = "first"')
