@@ -49,6 +49,13 @@ mount(page({}, hero({
 `;
     const modern = "const { Button } = Kumo; GadgetUI.mount(React.createElement(Button));";
     expect(upgradeLegacyGadgetClient(legacy, modern)).toBe(modern);
+    const original = `
+const CABINS = [];
+const style = document.createElement("style");
+style.textContent = \`body { background: #faf8f3; }\`;
+const description = "Compare programme pricing across direct and one-stop routes. Chart-derived guidance, built for deciding where to search next.";
+`;
+    expect(upgradeLegacyGadgetClient(original, modern)).toBe(modern);
     expect(upgradeLegacyGadgetClient("const { h, page } = Kumo;", modern))
       .toBe("const { h, page } = Kumo;");
   });

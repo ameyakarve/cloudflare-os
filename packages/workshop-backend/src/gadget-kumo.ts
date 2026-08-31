@@ -4,9 +4,16 @@ import DEPLOYMENT_GADGET_CLIENT_UPGRADE from "./generated/gadget-client-upgrade.
 import { withGadgetKumoRuntime as withLegacyKumo } from "./gadget-kumo-legacy";
 
 const LEGACY_KUMO_CLIENT = /^\s*const\s*\{[^}]*\b(?:page|hero|card|notice|loading)\b[^}]*\}\s*=\s*Kumo\s*;/m;
-const LEGACY_AWARD_EXPLORER = [
-  "const { h, page, hero, row, button, input, select, field, card, badge, notice, empty, loading, mount } = Kumo;",
-  'description: "Compare published programme pricing across schedule-backed direct and one-stop routes."',
+const LEGACY_AWARD_EXPLORERS = [
+  [
+    "const { h, page, hero, row, button, input, select, field, card, badge, notice, empty, loading, mount } = Kumo;",
+    'description: "Compare published programme pricing across schedule-backed direct and one-stop routes."',
+  ],
+  [
+    "const CABINS = [",
+    "style.textContent = `",
+    "Compare programme pricing across direct and one-stop routes. Chart-derived guidance, built for deciding where to search next.",
+  ],
 ];
 
 /** Replaces the exact deployment-owned pre-Kumo Award Explorer snapshot at render time. */
@@ -14,7 +21,8 @@ export function upgradeLegacyGadgetClient(
   clientCode: string,
   replacement = DEPLOYMENT_GADGET_CLIENT_UPGRADE,
 ): string {
-  return replacement && LEGACY_AWARD_EXPLORER.every(marker => clientCode.includes(marker))
+  return replacement && LEGACY_AWARD_EXPLORERS.some(markers =>
+    markers.every(marker => clientCode.includes(marker)))
     ? replacement
     : clientCode;
 }
