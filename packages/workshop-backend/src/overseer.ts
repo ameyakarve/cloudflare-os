@@ -218,11 +218,10 @@ export class MilesVaultLedgerBinding
     let users = this.ctx.exports.UserDurableObject;
     let owner = users.get(users.idFromString(this.ctx.props.ownerId));
     let profile = await owner.whoami();
-    let ledgerKey = await owner.getMilesVaultLedgerKey() ?? profile.id;
     let namespace = (this.env as unknown as {MILESVAULT_LEDGER: MilesVaultLedgerNamespace})
         .MILESVAULT_LEDGER;
     if (!namespace) throw new Error("MilesVault ledger service is unavailable.");
-    return namespace.get(namespace.idFromName(ledgerKey));
+    return namespace.get(namespace.idFromName(profile.id));
   }
 
   /** Load the canonical journal rows for the owning MilesVault user. */
