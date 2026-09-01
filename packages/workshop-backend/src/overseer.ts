@@ -178,6 +178,76 @@ interface RestoreForgerEntrypoint extends WorkerEntrypoint {
   forge(params: unknown): Promise<unknown>;
 }
 
+type MilesVaultLedgerEntryKind =
+    "txn" | "open" | "close" | "commodity" | "balance" | "price" | "note" | "document" | "event";
+
+type MilesVaultLedgerEntry = {
+  kind: MilesVaultLedgerEntryKind;
+  id: number;
+  raw_text: string;
+  updated_at: number;
+};
+
+type MilesVaultLedgerEntryRef = {
+  kind: MilesVaultLedgerEntryKind;
+  id: number;
+  expected_updated_at: number;
+};
+
+type MilesVaultLedgerDo = {
+  listEntries(): Promise<{rows: MilesVaultLedgerEntry[]}>;
+  replaceBuffer(input: {knownIds: MilesVaultLedgerEntryRef[], buffer: string}): Promise<unknown>;
+};
+
+type MilesVaultLedgerNamespace = {
+  idFromName(name: string): DurableObjectId;
+  get(id: DurableObjectId): MilesVaultLedgerDo;
+};
+
+type MilesVaultLedgerBindingProps = {ownerId: string};
+
+const MILESVAULT_LEDGER_ENTRY_KINDS = new Set<MilesVaultLedgerEntryKind>([
+  "txn", "open", "close", "commodity", "balance", "price", "note", "document", "event",
+]);
+
+/** First-party data plane used only by the bundled MilesVault Ledger output. */
+@validateRpc()
+export class MilesVaultLedgerBinding
+    extends WorkerEntrypoint<Cloudflare.Env, MilesVaultLedgerBindingProps> {
+  async #ledger(): Promise<MilesVaultLedgerDo> {
+    let users = this.ctx.exports.UserDurableObject;
+    let owner = users.get(users.idFromString(this.ctx.props.ownerId));
+    let profile = await owner.whoami();
+    let namespace = (this.env as unknown as {MILESVAULT_LEDGER: MilesVaultLedgerNamespace})
+        .MILESVAULT_LEDGER;
+    if (!namespace) throw new Error("MilesVault ledger service is unavailable.");
+    return namespace.get(namespace.idFromName(profile.id));
+  }
+
+  /** Load the canonical journal rows for the owning MilesVault user. */
+  async listEntries(): Promise<{rows: MilesVaultLedgerEntry[]}> {
+    return (await this.#ledger()).listEntries();
+  }
+
+  /** Run MilesVault's existing OCC-checked, atomic journal replacement. */
+  async replaceBuffer(input: {knownIds: MilesVaultLedgerEntryRef[], buffer: string}): Promise<unknown> {
+    if (!input || !Array.isArray(input.knownIds) || typeof input.buffer !== "string") {
+      throw new TypeError("replaceBuffer requires knownIds and a Beancount buffer.");
+    }
+    if (input.buffer.length > 5_000_000 || input.knownIds.length > 100_000) {
+      throw new TypeError("Ledger update is too large.");
+    }
+    for (let [index, ref] of input.knownIds.entries()) {
+      if (!ref || !MILESVAULT_LEDGER_ENTRY_KINDS.has(ref.kind) ||
+          !Number.isSafeInteger(ref.id) || ref.id <= 0 ||
+          !Number.isSafeInteger(ref.expected_updated_at)) {
+        throw new TypeError(`Invalid knownIds[${index}].`);
+      }
+    }
+    return (await this.#ledger()).replaceBuffer(input);
+  }
+}
+
 // The capability handed to CODE_MODE_HARNESS's run() that lets executed code invoke
 // `env.<name>[restore](params)`. Only executeCode receives this capability -- gadget workers
 // never do -- and it's passed as a transient stub argument to run(), so it lives exactly as
@@ -323,6 +393,10 @@ type GadgetRecord = {
   // from (see BlueprintMetadata.output). Absent for a gadget built from scratch, which displays as
   // a generic app. Purely descriptive: it names and draws the gadget, and confers nothing.
   output?: BlueprintOutput;
+
+  // Trusted deployment marker, set only by AuthenticatedApi while instantiating a bundled system
+  // output. Unlike `output`, this is authority-bearing and can never come from blueprint metadata.
+  systemOutput?: "ledger";
 
   // Name of the gadget to use in the workspace's default binding list for new chats. That is, when
   // a new (normal, non-spawner) chat is started, this gadget will be available in its `env` under
@@ -2156,6 +2230,15 @@ class OverseerImpl implements AgentHooks {
     let env: Record<string, any> = {}
     let gadget = this.getGadgetRecord(gadgetId);
     env.GADGET = this.makeBindingLoopback({type: "gadget", id: gadgetId}, caller);
+    // This is a deployment-owned capability for the bundled Ledger output, not a general Gadget
+    // binding. The agent does not receive it; other gadgets continue to use the read-only Ledger
+    // Gatekeeper when they need current holdings.
+    if (gadget.systemOutput === "ledger" && this.ownerId) {
+      let exports = this.ctx.exports as unknown as {
+        MilesVaultLedgerBinding(options: {props: MilesVaultLedgerBindingProps}): MilesVaultLedgerDo,
+      };
+      env.MILESVAULT_LEDGER = exports.MilesVaultLedgerBinding({props: {ownerId: this.ownerId}});
+    }
     for (let [name, edge] of this.visibleBindings(gadget, forChatId)) {
       env[name] = this.makeBindingLoopback({type: "gatekeeper", id: edge.target}, caller);
     }
@@ -6863,7 +6946,8 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
    * Initialize this workspace's default gadget from a blueprint's code snapshot. Called by
    * AuthenticatedApi.newGadgetFromBlueprint() after creating (and opening) the DO.
    */
-  async initializeFromBlueprint(code: Uint8Array, title: string, output?: BlueprintOutput)
+  async initializeFromBlueprint(code: Uint8Array, title: string, output?: BlueprintOutput,
+                                systemOutput?: "ledger")
       : Promise<void> {
     // Set the title. The default gadget (created just below) inherits it.
     this.impl.storage.title.put(title);
@@ -6878,8 +6962,12 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     if (output) {
       let record = this.impl.getGadgetRecord(gadgetId);
       record.output = output;
+      if (systemOutput) record.systemOutput = systemOutput;
       this.impl.storage.gadgets.put(record);
     }
+    // The direct Ledger capability is scoped to the owner rather than mediated by observer-aware
+    // Gatekeepers, so a system Ledger workspace is deliberately private.
+    if (systemOutput === "ledger") this.impl.storage.prohibitAllSharing.put(true);
 
     // Copy the blueprint's files into the gadget's files root. Root names don't transfer via Yjs
     // updates -- the archive always uses the unnamed root "" while the destination gadget may own

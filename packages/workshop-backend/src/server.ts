@@ -19,7 +19,7 @@ import { getAiGatewayConfig } from "./ai-gateway.js";
 import { AdminSettings, AdminApiImpl } from "./admin-settings.js";
 import { BlueprintKvRecord, buildBlueprintArchiveStream, sanitizeBlueprintOutput, listFeaturedBlueprintsFromKv, parseBlueprintArchive, randomBlueprintId, readBlueprintContent, readBlueprintKvRecord } from "./blueprint-archive.js";
 import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
-import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback } from "./overseer";
+import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback, MilesVaultLedgerBinding } from "./overseer";
 import { ExternalMessageGateway } from "./external-message-gateway";
 import { RpcStub as NativeRpcStub } from "cloudflare:workers";
 import { recordAnalytics } from "./analytics";
@@ -56,7 +56,7 @@ export { UserDurableObject, GatekeeperConnectCallbackImpl };
 // Re-export entrypoint types from overseer.ts.
 export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
     CodeModeTailLoopback, AgentSpawnerGatekeeper, GadgetTailLoopback,
-    AgentSelfLoopback, TransientStubLoopback };
+    AgentSelfLoopback, TransientStubLoopback, MilesVaultLedgerBinding };
 
 // Re-export service-binding entrypoint for external channel integrations.
 export { ExternalMessageGateway };
@@ -299,7 +299,20 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     return this.#user.listGadgets();
   }
 
-  listOutputs(): Promise<ListOutputsResult> {
+  async listOutputs(): Promise<ListOutputsResult> {
+    // Ledger is a deployment-owned singleton output: the first Outputs visit provisions it, and
+    // later visits reuse the same workspace. Installation of bundled blueprints is kicked off at
+    // the request boundary, so a first-ever request may race it; failing closed here lets the
+    // frontend's normal Outputs refresh retry once installation finishes.
+    if (!await this.#user.getSystemOutputWorkspace("ledger")) {
+      try {
+        using _ledger = await this.newGadgetFromBlueprint("milesvault.ledger", {});
+      } catch (err) {
+        logger.warn("failed to ensure MilesVault Ledger output", {
+          event: "system-output.ledger.ensure.failed", error: err,
+        });
+      }
+    }
     return this.#user.listOutputs();
   }
 
@@ -441,16 +454,24 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     let codeBytes = await readBlueprintContent(this.env, blueprintId, kvRecord.metadata.version);
     if (!codeBytes) throw new Error("Blueprint content not found in R2.");
 
-    // 3. Create new Overseer DO (same as newGadget()).
-    let id = this.overseers.newUniqueId().toString();
-    await this.#user.newGadget(id, kvRecord.metadata.title);
+    // 3. Create new Overseer DO (same as newGadget()). Deployment-owned system outputs first
+    // claim a stable per-user slot, so every creation path opens the existing Ledger instead of
+    // producing a duplicate.
+    let proposedId = this.overseers.newUniqueId().toString();
+    let systemOutputKey = blueprintId === "milesvault.ledger" ? "ledger" : null;
+    let id = systemOutputKey
+      ? await this.#user.claimSystemOutput(systemOutputKey, proposedId, kvRecord.metadata.title)
+      : proposedId;
+    if (id !== proposedId) return this.openGadget(id);
+    if (!systemOutputKey) await this.#user.newGadget(id, kvRecord.metadata.title);
     let overseerResult = await this.#openGadgetInternal(id);
 
     // 4. Initialize from blueprint code.
     let overseerDo = this.overseers.get(this.overseers.idFromString(id));
     await overseerDo.initializeFromBlueprint(codeBytes, kvRecord.metadata.title,
         deploymentOutputForBlueprint(await readAdminConfig(this.env), blueprintId,
-            sanitizeBlueprintOutput(kvRecord.metadata.output)));
+            sanitizeBlueprintOutput(kvRecord.metadata.output)),
+        systemOutputKey === "ledger" ? "ledger" : undefined);
 
     // 5. Create gatekeepers from assignments and bind them into the workspace's (only) gadget.
     let metadata = await overseerResult.getMetadata();

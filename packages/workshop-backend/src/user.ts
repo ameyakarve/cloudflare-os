@@ -209,6 +209,10 @@ function makeUserStorage(storage: DurableObjectStorage) {
       // time and resumes here on the next visit.
       outputsBackfillCursor: "",
 
+      // Deployment-owned singleton outputs. The value is the workspace ID containing the
+      // canonical output; the Gadget itself remains ordinary and can be recreated if deleted.
+      systemOutputs: <Record<string, string>>{},
+
       nextAccountId: 0,
       pinnedBlueprints: <string[]>[],
 
@@ -772,6 +776,28 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     this.storage.gadgets.put({id, title, created});
   }
 
+  /** Return the live workspace claimed by a deployment-owned singleton output. */
+  async getSystemOutputWorkspace(key: string): Promise<string | null> {
+    let outputs = this.storage.systemOutputs.get();
+    let id = outputs[key];
+    if (!id) return null;
+    if (this.storage.gadgets.get(id)) return id;
+    delete outputs[key];
+    this.storage.systemOutputs.put(outputs);
+    return null;
+  }
+
+  /** Atomically claim one workspace as a deployment-owned singleton output. */
+  async claimSystemOutput(key: string, proposedId: string, title: string): Promise<string> {
+    let existing = await this.getSystemOutputWorkspace(key);
+    if (existing) return existing;
+    await this.newGadget(proposedId, title);
+    let outputs = this.storage.systemOutputs.get();
+    outputs[key] = proposedId;
+    this.storage.systemOutputs.put(outputs);
+    return proposedId;
+  }
+
   async ensureGadgetRegistered(id: string, title: string): Promise<void> {
     if (this.storage.gadgets.get(id)) return;
     await this.newGadget(id, title);
@@ -791,6 +817,14 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   async deleteGadget(id: string): Promise<void> {
     this.storage.gadgets.delete(id);
     this.storage.outputs.byWorkspace.delete(id);
+    let outputs = this.storage.systemOutputs.get();
+    let changed = false;
+    for (let [key, workspaceId] of Object.entries(outputs)) {
+      if (workspaceId !== id) continue;
+      delete outputs[key];
+      changed = true;
+    }
+    if (changed) this.storage.systemOutputs.put(outputs);
   }
 
   /**

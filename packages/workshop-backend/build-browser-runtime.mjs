@@ -10,6 +10,7 @@ const pageOutputFile = resolve(packageDir, "src/generated/browser-export-page.js
 const kumoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-kumo-runtime.txt");
 const kumoStylesOutputFile = resolve(packageDir, "src/generated/gadget-kumo-styles.txt");
 const graphRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-graph-runtime.txt");
+const geoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-geo-runtime.txt");
 const gadgetClientUpgradeOutputFile = resolve(packageDir, "src/generated/gadget-client-upgrade.txt");
 
 const runtimeResult = await build({
@@ -56,8 +57,18 @@ const graphRuntimeResult = await build({
   minify: true,
   write: false,
 });
+const geoRuntimeResult = await build({
+  entryPoints: [resolve(packageDir, "browser/gadget-geo-runtime.ts")],
+  bundle: true,
+  format: "iife",
+  platform: "browser",
+  target: "es2025",
+  minify: true,
+  write: false,
+});
 const kumoRuntimeBytes = kumoRuntimeResult.outputFiles[0].contents;
 const graphRuntimeBytes = graphRuntimeResult.outputFiles[0].contents;
+const geoRuntimeBytes = geoRuntimeResult.outputFiles[0].contents;
 const kumoStylesBytes = readFileSync(fileURLToPath(import.meta.resolve("@cloudflare/kumo/styles/standalone")));
 const gadgetClientUpgradeBytes = process.env.GADGET_CLIENT_UPGRADE_PATH
   ? readFileSync(resolve(packageDir, process.env.GADGET_CLIENT_UPGRADE_PATH))
@@ -71,6 +82,8 @@ assertContains(kumoRuntimeBytes, ".Kumo=Object.freeze", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Button:", "Kumo browser runtime");
 assertContains(graphRuntimeBytes, ".GadgetGraph=Object.freeze", "Gadget graph runtime");
 assertContains(graphRuntimeBytes, "layoutDirected", "Gadget graph runtime");
+assertContains(geoRuntimeBytes, ".GadgetGeo=Object.freeze", "Gadget geo runtime");
+assertContains(geoRuntimeBytes, "RouteGlobe:", "Gadget geo runtime");
 assertContains(kumoStylesBytes, "--color-kumo-brand", "Kumo standalone styles");
 assertContains(kumoStylesBytes, ".bg-kumo-base", "Kumo standalone styles");
 if (gadgetClientUpgradeBytes.byteLength > 0) {
@@ -83,6 +96,7 @@ writeIfChanged(sanitizerOutputFile, sanitizerResult.outputFiles[0].contents);
 writeIfChanged(pageOutputFile, pageResult.outputFiles[0].contents);
 writeIfChanged(kumoRuntimeOutputFile, kumoRuntimeBytes);
 writeIfChanged(graphRuntimeOutputFile, graphRuntimeBytes);
+writeIfChanged(geoRuntimeOutputFile, geoRuntimeBytes);
 writeIfChanged(kumoStylesOutputFile, kumoStylesBytes);
 writeIfChanged(gadgetClientUpgradeOutputFile, gadgetClientUpgradeBytes);
 

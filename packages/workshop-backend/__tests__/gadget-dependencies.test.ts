@@ -56,6 +56,13 @@ style.textContent = \`body { background: #faf8f3; }\`;
 const description = "Compare programme pricing across direct and one-stop routes. Chart-derived guidance, built for deciding where to search next.";
 `;
     expect(upgradeLegacyGadgetClient(original, modern)).toBe(modern);
+    const badGlobe = `
+function RouteGlobe({ option, origin, destination, airports }) {
+  const project = code => [code.length, code.length];
+}
+const guide = "Published and observed pricing, not live seats";
+`;
+    expect(upgradeLegacyGadgetClient(badGlobe, modern)).toBe(modern);
     expect(upgradeLegacyGadgetClient("const { h, page } = Kumo;", modern))
       .toBe("const { h, page } = Kumo;");
   });
