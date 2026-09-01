@@ -495,6 +495,11 @@ standalone stylesheet is already loaded. Use Kumo semantic classes such as \`bg-
 \`text-kumo-subtle\`; never invent a palette, copy a CSS reset/design system, or write a DOM factory.
 Keep client.js focused on data and interactions. Custom CSS is only for a domain visualization.
 
+Directed graph Gadgets can use the preloaded \`GadgetGraph.layoutDirected({ nodes, edges, direction,
+nodeSeparation, rankSeparation, edgeSeparation, marginX, marginY })\` helper. Nodes are
+\`{ id, width, height }\`, edges are \`{ source, target }\`, and the result is
+\`{ positions: Map<id, { x, y }>, width, height }\`. It uses Dagre; do not hand-write rank/row layout.
+
 For example: \`const { createElement: h } = React; const { Button, Surface, Text } = Kumo;
 function App() { return h(Surface, { className: "p-4" }, h(Text, { variant: "heading1", as: "h1" },
 "Hello"), h(Button, { variant: "primary", onClick: run }, "Run")); } GadgetUI.mount(h(App));\`

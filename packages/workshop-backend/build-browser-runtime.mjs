@@ -9,6 +9,7 @@ const sanitizerOutputFile = resolve(packageDir, "src/generated/html-sanitizer-ru
 const pageOutputFile = resolve(packageDir, "src/generated/browser-export-page.js");
 const kumoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-kumo-runtime.txt");
 const kumoStylesOutputFile = resolve(packageDir, "src/generated/gadget-kumo-styles.txt");
+const graphRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-graph-runtime.txt");
 const gadgetClientUpgradeOutputFile = resolve(packageDir, "src/generated/gadget-client-upgrade.txt");
 
 const runtimeResult = await build({
@@ -46,7 +47,17 @@ const kumoRuntimeResult = await build({
   minify: true,
   write: false,
 });
+const graphRuntimeResult = await build({
+  entryPoints: [resolve(packageDir, "browser/gadget-graph-runtime.ts")],
+  bundle: true,
+  format: "iife",
+  platform: "browser",
+  target: "es2025",
+  minify: true,
+  write: false,
+});
 const kumoRuntimeBytes = kumoRuntimeResult.outputFiles[0].contents;
+const graphRuntimeBytes = graphRuntimeResult.outputFiles[0].contents;
 const kumoStylesBytes = readFileSync(fileURLToPath(import.meta.resolve("@cloudflare/kumo/styles/standalone")));
 const gadgetClientUpgradeBytes = process.env.GADGET_CLIENT_UPGRADE_PATH
   ? readFileSync(resolve(packageDir, process.env.GADGET_CLIENT_UPGRADE_PATH))
@@ -58,6 +69,8 @@ const gadgetClientUpgradeBytes = process.env.GADGET_CLIENT_UPGRADE_PATH
     : new Uint8Array();
 assertContains(kumoRuntimeBytes, ".Kumo=Object.freeze", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Button:", "Kumo browser runtime");
+assertContains(graphRuntimeBytes, ".GadgetGraph=Object.freeze", "Gadget graph runtime");
+assertContains(graphRuntimeBytes, "layoutDirected", "Gadget graph runtime");
 assertContains(kumoStylesBytes, "--color-kumo-brand", "Kumo standalone styles");
 assertContains(kumoStylesBytes, ".bg-kumo-base", "Kumo standalone styles");
 if (gadgetClientUpgradeBytes.byteLength > 0) {
@@ -69,6 +82,7 @@ writeIfChanged(runtimeOutputFile, runtimeResult.outputFiles[0].contents);
 writeIfChanged(sanitizerOutputFile, sanitizerResult.outputFiles[0].contents);
 writeIfChanged(pageOutputFile, pageResult.outputFiles[0].contents);
 writeIfChanged(kumoRuntimeOutputFile, kumoRuntimeBytes);
+writeIfChanged(graphRuntimeOutputFile, graphRuntimeBytes);
 writeIfChanged(kumoStylesOutputFile, kumoStylesBytes);
 writeIfChanged(gadgetClientUpgradeOutputFile, gadgetClientUpgradeBytes);
 

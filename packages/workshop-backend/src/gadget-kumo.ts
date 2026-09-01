@@ -1,5 +1,6 @@
 import KUMO_RUNTIME from "./generated/gadget-kumo-runtime.txt";
 import KUMO_STYLES from "./generated/gadget-kumo-styles.txt";
+import GRAPH_RUNTIME from "./generated/gadget-graph-runtime.txt";
 import DEPLOYMENT_GADGET_CLIENT_UPGRADE from "./generated/gadget-client-upgrade.txt";
 import { withGadgetKumoRuntime as withLegacyKumo } from "./gadget-kumo-legacy";
 
@@ -36,12 +37,13 @@ export function withGadgetKumo(clientCode: string): string {
   if (LEGACY_KUMO_CLIENT.test(clientCode)) return withLegacyKumo(clientCode);
 
   const styles = JSON.stringify(KUMO_STYLES);
+  const graphRuntime = clientCode.includes("GadgetGraph") ? `${GRAPH_RUNTIME}\n` : "";
   return `(() => {\n` +
     `  const style = document.createElement("style");\n` +
     `  style.dataset.kumo = "2.9.2";\n` +
     `  style.textContent = ${styles};\n` +
     `  document.head.append(style);\n` +
-    `})();\n${KUMO_RUNTIME}\n${clientCode}`;
+    `})();\n${KUMO_RUNTIME}\n${graphRuntime}${clientCode}`;
 }
 
-export { KUMO_RUNTIME, KUMO_STYLES };
+export { GRAPH_RUNTIME, KUMO_RUNTIME, KUMO_STYLES };
