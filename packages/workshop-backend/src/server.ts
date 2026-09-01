@@ -300,19 +300,31 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   async listOutputs(): Promise<ListOutputsResult> {
-    // Ledger is a deployment-owned singleton output: the first Outputs visit provisions it, and
-    // later visits reuse the same workspace. Installation of bundled blueprints is kicked off at
-    // the request boundary, so a first-ever request may race it; failing closed here lets the
-    // frontend's normal Outputs refresh retry once installation finishes.
-    if (!await this.#user.getSystemOutputWorkspace("ledger")) {
-      try {
-        using _ledger = await this.newGadgetFromBlueprint("milesvault.ledger", {});
-      } catch (err) {
-        logger.warn("failed to ensure MilesVault Ledger output", {
-          event: "system-output.ledger.ensure.failed", error: err,
-        });
-      }
+    // The API request boundary starts format installation in the background. Await the same
+    // idempotent installer here before resolving the singleton, otherwise a user's first Outputs
+    // visit can race the install, miss the Ledger blueprint, and stop polling with no Ledger.
+    let ledgerId = await this.#user.getSystemOutputWorkspace("ledger");
+    if (!ledgerId) {
+      let formatsReady = await this.adminSettings.getByName("").ensureFormatBlueprintsInstalled();
+      if (!formatsReady) throw new Error("Bundled output formats are not ready.");
+      using _ledger = await this.newGadgetFromBlueprint("milesvault.ledger", {});
+      ledgerId = await this.#user.getSystemOutputWorkspace("ledger");
+      if (!ledgerId) throw new Error("MilesVault Ledger output was not created.");
     }
+
+    let listed = await this.#user.listOutputs();
+    if (listed.outputs.some(output => output.workspaceId === ledgerId && output.output?.id === "ledger")) {
+      return listed;
+    }
+
+    // Do not rely on the workspace's best-effort asynchronous index fan-out when the canonical
+    // Ledger is absent from the index. Sync it once so this very listOutputs() call returns the
+    // card; steady-state reads above remain write-free.
+    let ledgerOutputs = await this.overseers.get(this.overseers.idFromString(ledgerId))
+        .getOutputsForOwnerBackfill(this.#userId.toString());
+    if (!ledgerOutputs) throw new Error("MilesVault Ledger output owner mismatch.");
+    await this.#user.syncWorkspaceOutputs(ledgerId, ledgerOutputs);
+
     return this.#user.listOutputs();
   }
 
