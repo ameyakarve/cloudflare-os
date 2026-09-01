@@ -17,6 +17,7 @@ import {
   Surface,
   Tabs,
   Text,
+  Textarea,
   cn,
 } from "@cloudflare/kumo";
 
@@ -42,6 +43,7 @@ runtimeGlobal.Kumo = Object.freeze({
   Surface,
   Tabs,
   Text,
+  Textarea,
   cn,
 });
 runtimeGlobal.kumo = runtimeGlobal.Kumo;

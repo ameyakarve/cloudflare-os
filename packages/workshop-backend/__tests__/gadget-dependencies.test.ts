@@ -28,7 +28,7 @@ describe("Gadget binding preflight", () => {
 
 describe("Gadget Kumo runtime", () => {
   it("loads the real runtime before a modern Gadget client", () => {
-    const client = "const { Button, Input, Surface } = Kumo; const { createElement } = React;";
+    const client = "const { Button, Input, Surface, Textarea } = Kumo; const { createElement } = React;";
     const bundle = withGadgetKumo(client);
     expect(bundle.indexOf('style.dataset.kumo = "2.9.2"')).toBeLessThan(bundle.indexOf(client));
   });
