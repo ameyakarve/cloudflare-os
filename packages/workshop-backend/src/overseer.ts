@@ -204,7 +204,7 @@ type MilesVaultLedgerNamespace = {
   get(id: DurableObjectId): MilesVaultLedgerDo;
 };
 
-type MilesVaultLedgerBindingProps = {ownerId: string};
+type MilesVaultLedgerBindingProps = {ledgerKey: string};
 
 const MILESVAULT_LEDGER_ENTRY_KINDS = new Set<MilesVaultLedgerEntryKind>([
   "txn", "open", "close", "commodity", "balance", "price", "note", "document", "event",
@@ -215,13 +215,10 @@ const MILESVAULT_LEDGER_ENTRY_KINDS = new Set<MilesVaultLedgerEntryKind>([
 export class MilesVaultLedgerBinding
     extends WorkerEntrypoint<Cloudflare.Env, MilesVaultLedgerBindingProps> {
   async #ledger(): Promise<MilesVaultLedgerDo> {
-    let users = this.ctx.exports.UserDurableObject;
-    let owner = users.get(users.idFromString(this.ctx.props.ownerId));
-    let profile = await owner.whoami();
     let namespace = (this.env as unknown as {MILESVAULT_LEDGER: MilesVaultLedgerNamespace})
         .MILESVAULT_LEDGER;
     if (!namespace) throw new Error("MilesVault ledger service is unavailable.");
-    return namespace.get(namespace.idFromName(profile.id));
+    return namespace.get(namespace.idFromName(this.ctx.props.ledgerKey));
   }
 
   /** Load the canonical journal rows for the owning MilesVault user. */
@@ -846,6 +843,10 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
       // Initialized on first startup.
       ownerId: <string | undefined>undefined,
 
+      // Exact upstream key for the deployment-owned MilesVault Ledger output. Presence is an
+      // authority marker: only AuthenticatedApi can stamp it on the owner's canonical workspace.
+      milesVaultLedgerKey: <string | undefined>undefined,
+
       // Version of this DO's storage schema, gating lazy migrations. Used to trigger migrations
       // at construction time.
       //   0 = Workspace from before multi-gadget mode was introduced (unless `ownerId` is absent,
@@ -1188,6 +1189,10 @@ class OverseerImpl implements AgentHooks {
   // If not set, this gadget doesn't exist yet.
   ownerId?: string;
 
+  // Cached deployment-owned Ledger capability key. Unlike the descriptive output metadata, this
+  // is trusted state and is never sourced from a Blueprint or Gadget.
+  milesVaultLedgerKey?: string;
+
   // Cached from storage, initialized during the constructor, since it is referenced often but
   // almost never changes.
   defaultGadgetId?: WorkpieceId;
@@ -1485,6 +1490,7 @@ class OverseerImpl implements AgentHooks {
     this.storage = makeOverseerStorage(ctx.storage);
     this.users = this.ctx.exports.UserDurableObject;
     this.ownerId = this.storage.ownerId.get();
+    this.milesVaultLedgerKey = this.storage.milesVaultLedgerKey.get();
 
     // Run any pending storage migration before anything else can touch storage. This must happen
     // in the constructor (not just open()) because the DO also wakes via constructor-driven
@@ -2233,11 +2239,13 @@ class OverseerImpl implements AgentHooks {
     // This is a deployment-owned capability for the bundled Ledger output, not a general Gadget
     // binding. The agent does not receive it; other gadgets continue to use the read-only Ledger
     // Gatekeeper when they need current holdings.
-    if (gadget.systemOutput === "ledger" && this.ownerId) {
+    if (gadget.systemOutput === "ledger" && this.milesVaultLedgerKey) {
       let exports = this.ctx.exports as unknown as {
         MilesVaultLedgerBinding(options: {props: MilesVaultLedgerBindingProps}): MilesVaultLedgerDo,
       };
-      env.MILESVAULT_LEDGER = exports.MilesVaultLedgerBinding({props: {ownerId: this.ownerId}});
+      env.MILESVAULT_LEDGER = exports.MilesVaultLedgerBinding({
+        props: {ledgerKey: this.milesVaultLedgerKey},
+      });
     }
     for (let [name, edge] of this.visibleBindings(gadget, forChatId)) {
       env[name] = this.makeBindingLoopback({type: "gatekeeper", id: edge.target}, caller);
@@ -6671,6 +6679,35 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   async getOutputsForOwnerBackfill(ownerId: string): Promise<WorkspaceOutputEntry[] | null> {
     if (this.impl.ownerId !== ownerId) return null;
     return this.impl.outputsSnapshot();
+  }
+
+  /**
+   * Stamp or repair the trusted capability on the owner's canonical Ledger workspace. The caller
+   * obtains both values from the authenticated server boundary; Gadget metadata alone can never
+   * grant this capability.
+   */
+  async configureMilesVaultLedgerOutput(ownerId: string, ledgerKey: string): Promise<void> {
+    if (this.impl.ownerId !== ownerId) throw new Error("MilesVault Ledger output owner mismatch.");
+    if (!ledgerKey || ledgerKey.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(ledgerKey)) {
+      throw new TypeError("Invalid MilesVault ledger key.");
+    }
+    let ledgerGadgets = [...this.impl.storage.gadgets.list()]
+        .filter(gadget => gadget.output?.id === "ledger");
+    if (ledgerGadgets.length !== 1) {
+      throw new Error("Canonical MilesVault Ledger gadget is missing or ambiguous.");
+    }
+    let gadget = ledgerGadgets[0];
+    if (gadget.systemOutput !== "ledger") {
+      gadget.systemOutput = "ledger";
+      this.impl.storage.gadgets.put(gadget);
+    }
+    if (this.impl.milesVaultLedgerKey !== ledgerKey) {
+      this.impl.milesVaultLedgerKey = ledgerKey;
+      this.impl.storage.milesVaultLedgerKey.put(ledgerKey);
+    }
+    if (!this.impl.storage.prohibitAllSharing.get()) {
+      this.impl.storage.prohibitAllSharing.put(true);
+    }
   }
 
   /**

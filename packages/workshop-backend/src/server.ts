@@ -76,7 +76,8 @@ type Env = Cloudflare.Env & {
 class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   constructor(private ctx: ExecutionContext, private env: Env,
       userId: DurableObjectId,
-      private abortSession: (reason: Error) => void) {
+      private abortSession: (reason: Error) => void,
+      private externalIdentityKey?: string) {
     super();
 
     this.#userId = userId;
@@ -95,6 +96,10 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   // have to worry about detecting when a stub has become broken.
   get #user(): DurableObjectStub<UserDurableObject> {
     return wrapDoStubForTelemetry(this.users.get(this.#userId));
+  }
+
+  async #ledgerIdentityKey(): Promise<string> {
+    return this.externalIdentityKey ?? (await this.#user.whoami()).id;
   }
 
   #isAdmin(): boolean {
@@ -312,6 +317,13 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       if (!ledgerId) throw new Error("MilesVault Ledger output was not created.");
     }
 
+    // The canonical Ledger workspace owns a deployment capability, not a user-selected binding.
+    // Stamp both its authority marker and exact upstream Durable Object key before it can open.
+    // This also repairs Ledger workspaces created by an older deployment.
+    let ledgerIdentityKey = await this.#ledgerIdentityKey();
+    await this.overseers.get(this.overseers.idFromString(ledgerId))
+        .configureMilesVaultLedgerOutput(this.#userId.toString(), ledgerIdentityKey);
+
     let listed = await this.#user.listOutputs();
     if (listed.outputs.some(output => output.workspaceId === ledgerId && output.output?.id === "ledger")) {
       return listed;
@@ -484,6 +496,10 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
         deploymentOutputForBlueprint(await readAdminConfig(this.env), blueprintId,
             sanitizeBlueprintOutput(kvRecord.metadata.output)),
         systemOutputKey === "ledger" ? "ledger" : undefined);
+    if (systemOutputKey === "ledger") {
+      await overseerDo.configureMilesVaultLedgerOutput(
+          this.#userId.toString(), await this.#ledgerIdentityKey());
+    }
 
     // 5. Create gatekeepers from assignments and bind them into the workspace's (only) gadget.
     let metadata = await overseerResult.getMetadata();
