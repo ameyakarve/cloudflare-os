@@ -197,6 +197,10 @@ function makeUserStorage(storage: DurableObjectStorage) {
         name: "User",
         id: "user@example.com",
       },
+      // MilesVault preserves the exact Google email returned at sign-in as its per-user Durable
+      // Object key. That key is deliberately separate from OS's normalized account identity:
+      // Durable Object names are case-sensitive, so lowercasing it can point at an empty ledger.
+      milesVaultLedgerKey: <string | null>null,
       quickModel: <string | null>null,
       preferredModel: <string | null>null,
       onboardingCompleted: false,
@@ -452,6 +456,19 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   async whoami(): Promise<AiChatAuthorInfo> {
     return this.storage.profile.get();
+  }
+
+  /** Store the exact, trusted MilesVault identity used to name this user's LedgerDO. */
+  async setMilesVaultLedgerKey(key: string): Promise<void> {
+    if (!key || key.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(key)) {
+      throw new TypeError("Invalid MilesVault ledger key.");
+    }
+    this.storage.milesVaultLedgerKey.put(key);
+  }
+
+  /** The exact MilesVault LedgerDO key, when this account was opened through MilesVault auth. */
+  async getMilesVaultLedgerKey(): Promise<string | null> {
+    return this.storage.milesVaultLedgerKey.get();
   }
 
   /** Like whoami(), but returns null if the account was never initialized. */
