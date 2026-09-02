@@ -3,6 +3,7 @@ import KUMO_STYLES from "./generated/gadget-kumo-styles.txt";
 import GRAPH_RUNTIME from "./generated/gadget-graph-runtime.txt";
 import GEO_RUNTIME from "./generated/gadget-geo-runtime.txt";
 import DEPLOYMENT_GADGET_CLIENT_UPGRADE from "./generated/gadget-client-upgrade.txt";
+import DEPLOYMENT_LEDGER_CLIENT_UPGRADE from "./generated/ledger-client-upgrade.txt";
 import { withGadgetKumoRuntime as withLegacyKumo } from "./gadget-kumo-legacy";
 
 const LEGACY_KUMO_CLIENT = /^\s*const\s*\{[^}]*\b(?:page|hero|card|notice|loading)\b[^}]*\}\s*=\s*Kumo\s*;/m;
@@ -22,16 +23,23 @@ const LEGACY_AWARD_EXPLORERS = [
     "Published and observed pricing, not live seats",
   ],
 ];
+const LEGACY_LEDGER_CLIENTS = [[
+  "const { Badge, Banner, Button, Loader, Surface, Text, Textarea } = Kumo;",
+  "h(Textarea, {",
+  "Your canonical MilesVault journal",
+]];
 
-/** Replaces exact deployment-owned Award Explorer snapshots at render time. */
+/** Replaces exact deployment-owned Gadget snapshots at render time without touching user code. */
 export function upgradeLegacyGadgetClient(
   clientCode: string,
   replacement = DEPLOYMENT_GADGET_CLIENT_UPGRADE,
+  ledgerReplacement = DEPLOYMENT_LEDGER_CLIENT_UPGRADE,
 ): string {
-  return replacement && LEGACY_AWARD_EXPLORERS.some(markers =>
-    markers.every(marker => clientCode.includes(marker)))
-    ? replacement
-    : clientCode;
+  if (replacement && LEGACY_AWARD_EXPLORERS.some(markers =>
+    markers.every(marker => clientCode.includes(marker)))) return replacement;
+  if (ledgerReplacement && LEGACY_LEDGER_CLIENTS.some(markers =>
+    markers.every(marker => clientCode.includes(marker)))) return ledgerReplacement;
+  return clientCode;
 }
 
 /** Prefixes a Gadget client with the real Cloudflare Kumo React library and standalone CSS. */

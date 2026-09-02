@@ -12,6 +12,7 @@ const kumoStylesOutputFile = resolve(packageDir, "src/generated/gadget-kumo-styl
 const graphRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-graph-runtime.txt");
 const geoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-geo-runtime.txt");
 const gadgetClientUpgradeOutputFile = resolve(packageDir, "src/generated/gadget-client-upgrade.txt");
+const ledgerClientUpgradeOutputFile = resolve(packageDir, "src/generated/ledger-client-upgrade.txt");
 
 const runtimeResult = await build({
   entryPoints: [resolve(packageDir, "browser/browser-export-runtime.ts")],
@@ -78,6 +79,11 @@ const gadgetClientUpgradeBytes = process.env.GADGET_CLIENT_UPGRADE_PATH
   : existsSync(gadgetClientUpgradeOutputFile)
     ? readFileSync(gadgetClientUpgradeOutputFile)
     : new Uint8Array();
+const ledgerClientUpgradeBytes = process.env.GADGET_LEDGER_CLIENT_UPGRADE_PATH
+  ? readFileSync(resolve(packageDir, process.env.GADGET_LEDGER_CLIENT_UPGRADE_PATH))
+  : existsSync(ledgerClientUpgradeOutputFile)
+    ? readFileSync(ledgerClientUpgradeOutputFile)
+    : new Uint8Array();
 assertContains(kumoRuntimeBytes, ".Kumo=Object.freeze", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Button:", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Textarea:", "Kumo browser runtime");
@@ -92,6 +98,10 @@ if (gadgetClientUpgradeBytes.byteLength > 0) {
   assertContains(gadgetClientUpgradeBytes, "const { Fragment, createElement: h", "Gadget client upgrade");
   assertContains(gadgetClientUpgradeBytes, "GadgetUI.mount(h(App))", "Gadget client upgrade");
 }
+if (ledgerClientUpgradeBytes.byteLength > 0) {
+  assertContains(ledgerClientUpgradeBytes, "const { BeancountEditor } = GadgetUI", "Ledger client upgrade");
+  assertContains(ledgerClientUpgradeBytes, "GadgetUI.mount(h(App))", "Ledger client upgrade");
+}
 
 writeIfChanged(runtimeOutputFile, runtimeResult.outputFiles[0].contents);
 writeIfChanged(sanitizerOutputFile, sanitizerResult.outputFiles[0].contents);
@@ -101,6 +111,7 @@ writeIfChanged(graphRuntimeOutputFile, graphRuntimeBytes);
 writeIfChanged(geoRuntimeOutputFile, geoRuntimeBytes);
 writeIfChanged(kumoStylesOutputFile, kumoStylesBytes);
 writeIfChanged(gadgetClientUpgradeOutputFile, gadgetClientUpgradeBytes);
+writeIfChanged(ledgerClientUpgradeOutputFile, ledgerClientUpgradeBytes);
 
 function assertContains(bytes, marker, label) {
   if (!new TextDecoder().decode(bytes).includes(marker)) {

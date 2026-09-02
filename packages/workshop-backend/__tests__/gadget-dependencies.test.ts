@@ -66,4 +66,16 @@ const guide = "Published and observed pricing, not live seats";
     expect(upgradeLegacyGadgetClient("const { h, page } = Kumo;", modern))
       .toBe("const { h, page } = Kumo;");
   });
+
+  it("upgrades only the deployment-owned Ledger snapshot", () => {
+    const oldLedger = `
+const { Badge, Banner, Button, Loader, Surface, Text, Textarea } = Kumo;
+function plan(rows, buffer) { return { rows, buffer }; }
+function App() { return h(Textarea, { value: "Your canonical MilesVault journal" }); }
+`;
+    const modernLedger = "const { BeancountEditor } = GadgetUI;";
+    expect(upgradeLegacyGadgetClient(oldLedger, "award", modernLedger)).toBe(modernLedger);
+    expect(upgradeLegacyGadgetClient("h(Textarea, { value: userCode });", "award", modernLedger))
+      .toBe("h(Textarea, { value: userCode });");
+  });
 });
