@@ -13,13 +13,14 @@ describe('WorkpiecePicker', () => {
 
   afterEach(() => act(() => root?.unmount()))
 
-  async function render(expanded: boolean, renamable = true) {
+  async function render(expanded: boolean) {
     const container = document.createElement('div')
     root = createRoot(container)
+    const onRemove = vi.fn<(id: number) => void>()
     await act(async () => root!.render(
       <WorkpiecePicker
         gadgets={[
-          { id: 1, type: 'gadget', title: 'Hooked' },
+          { id: 1, type: 'gadget', title: 'Hooked', systemOutput: 'ledger' },
           { id: 2, type: 'gadget', title: 'Ordinary' },
         ]}
         selectedId={null}
@@ -28,19 +29,19 @@ describe('WorkpiecePicker', () => {
         onExpandedChange={vi.fn<(expanded: boolean) => void>()}
         onSelect={vi.fn<(id: number) => void>()}
         onRename={vi.fn<(id: number, title: string) => void>()}
-        renamable={renamable}
+        onRemove={onRemove}
         pendingActivityCount={0}
         onOpenActivity={vi.fn<() => void>()}
       />,
     ))
-    return container
+    return { container, onRemove }
   }
 
   // `role="img"` is what makes the label reachable; a bare span would be named nothing.
   const HOOK_BADGE = '[role="img"][aria-label="Hooks enabled"]'
 
   it('names the badge only on gadgets with an enabled hook', async () => {
-    const container = await render(true)
+    const { container } = await render(true)
     const labelled = container.querySelectorAll(HOOK_BADGE)
 
     expect(labelled).toHaveLength(1)
@@ -48,16 +49,22 @@ describe('WorkpiecePicker', () => {
   })
 
   it('keeps the badge named when collapsed, where no title is rendered', async () => {
-    const container = await render(false)
+    const { container } = await render(false)
 
     expect(container.textContent).not.toContain('Hooked')
     expect(container.querySelectorAll(HOOK_BADGE)).toHaveLength(1)
   })
 
-  it('does not expose gadget renaming for a managed workspace', async () => {
-    const container = await render(true, false)
+  it('protects only the managed gadget and exposes custom gadget actions', async () => {
+    const { container, onRemove } = await render(true)
 
     expect(container.querySelector('[aria-label="Rename Hooked"]')).toBeNull()
-    expect(container.querySelector('[aria-label="Rename Ordinary"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Remove Hooked"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Rename Ordinary"]')).not.toBeNull()
+
+    const remove = container.querySelector<HTMLButtonElement>('[aria-label="Remove Ordinary"]')
+    expect(remove).not.toBeNull()
+    await act(async () => remove!.click())
+    expect(onRemove).toHaveBeenCalledWith(2)
   })
 })

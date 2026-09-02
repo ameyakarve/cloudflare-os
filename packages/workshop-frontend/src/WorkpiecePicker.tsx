@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CaretLeft, CaretRight, Check, Lightning, PencilSimple, Pulse, X } from '@phosphor-icons/react'
+import { CaretLeft, CaretRight, Check, Lightning, PencilSimple, Pulse, Trash, X } from '@phosphor-icons/react'
 import { FormatGlyph } from './components/format/FormatVisuals'
 import { Tooltip } from '@cloudflare/kumo'
 import type { WorkpieceId, WorkpieceSummary } from '@gadgets/workshop-shared/api'
@@ -22,7 +22,7 @@ interface WorkpiecePickerProps {
   onExpandedChange: (expanded: boolean) => void
   onSelect: (id: WorkpieceId) => void
   onRename: (id: WorkpieceId, title: string) => void
-  renamable?: boolean
+  onRemove: (id: WorkpieceId) => void
   pendingActivityCount: number
   onOpenActivity: () => void
 }
@@ -36,7 +36,7 @@ export default function WorkpiecePicker({
   onExpandedChange,
   onSelect,
   onRename,
-  renamable = true,
+  onRemove,
   pendingActivityCount,
   onOpenActivity,
 }: WorkpiecePickerProps) {
@@ -81,8 +81,9 @@ export default function WorkpiecePicker({
           const isPending = gadget.chatId !== undefined
           const isAgentEditing = agentEditingId === gadget.id && !isSelected
           const hasHook = hookedGadgetIds.has(gadget.id)
+          const isManaged = gadget.systemOutput !== undefined
 
-          if (renamable && expanded && editing?.id === gadget.id) {
+          if (!isManaged && expanded && editing?.id === gadget.id) {
             return (
               <div key={gadget.id} className="flex items-center gap-1 py-0.5">
                 <WorkshopInput
@@ -171,15 +172,26 @@ export default function WorkpiecePicker({
                   )}
                 </button>
               </Tooltip>
-              {renamable && expanded && (
-                <WorkshopIconButton
-                  onClick={() => setEditing({ id: gadget.id, value: gadget.title })}
-                  className="!h-6 !w-6 flex-shrink-0 opacity-0 transition-opacity duration-150 ease-out group-hover/workpiece:opacity-100 focus-visible:opacity-100"
-                  title="Rename gadget"
-                  aria-label={`Rename ${gadget.title}`}
-                >
-                  <PencilSimple size={13} />
-                </WorkshopIconButton>
+              {!isManaged && expanded && (
+                <div className="flex flex-shrink-0 items-center opacity-0 transition-opacity duration-150 group-hover/workpiece:opacity-100 focus-within:opacity-100">
+                  <WorkshopIconButton
+                    onClick={() => setEditing({ id: gadget.id, value: gadget.title })}
+                    className="!h-6 !w-6"
+                    title="Rename gadget"
+                    aria-label={`Rename ${gadget.title}`}
+                  >
+                    <PencilSimple size={13} />
+                  </WorkshopIconButton>
+                  <WorkshopIconButton
+                    danger
+                    onClick={() => onRemove(gadget.id)}
+                    className="!h-6 !w-6"
+                    title="Remove gadget"
+                    aria-label={`Remove ${gadget.title}`}
+                  >
+                    <Trash size={13} />
+                  </WorkshopIconButton>
+                </div>
               )}
             </div>
           )

@@ -281,6 +281,23 @@ describe("deployment-managed Ledger workspace", () => {
     expect((await secondary.getUiBundle())?.jsCode).toContain("secondary");
     expect(await gadget.getUiBundle()).toEqual(ledgerBundleBefore);
 
+    // The Outputs index must preserve the same per-workpiece boundary: only the canonical Ledger
+    // is protected, while a custom gadget in its workspace remains user-modifiable.
+    const outputSnapshot = await overseerDo.getOutputsForOwnerBackfill(userId);
+    expect(outputSnapshot?.find(output => output.workpieceId === metadata.defaultGadgetId))
+      .toMatchObject({systemOutput: "ledger"});
+    expect(outputSnapshot?.find(output => output.workpieceId === secondaryId))
+      .not.toHaveProperty("systemOutput");
+    await user.syncWorkspaceOutputs(workspaceIdString, outputSnapshot!);
+    const indexedOutputs = (await user.listOutputs()).outputs
+      .filter(output => output.workspaceId === workspaceIdString);
+    expect(indexedOutputs.find(output => output.workpieceId === metadata.defaultGadgetId))
+      .toMatchObject({systemOutput: "ledger"});
+    expect(indexedOutputs.find(output => output.workpieceId === secondaryId))
+      .not.toHaveProperty("systemOutput");
+
+    await secondary.remove();
+
     // Presentation preferences remain user-owned even though the workspace is managed.
     await workspace.setPinned(true);
     expect((await user.getGadget(workspaceIdString))?.pinned).toBe(true);
