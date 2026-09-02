@@ -1790,7 +1790,6 @@ class OverseerImpl implements AgentHooks {
   // if any.
   createGadget(title: string, bindingName: string, chatId?: number,
                output?: BlueprintOutput): GadgetRecord {
-    this.assertWorkspaceMutable();
     title = title.trim();
     if (!title) {
       throw new Error("A gadget requires a non-empty title.");
@@ -2104,6 +2103,9 @@ class OverseerImpl implements AgentHooks {
       if (record.output) {
         summary.output = record.output;
       }
+      if (record.systemOutput) {
+        summary.systemOutput = record.systemOutput;
+      }
       if (record.pending) {
         summary.chatId = record.pending.chatId;
       }
@@ -2272,6 +2274,52 @@ class OverseerImpl implements AgentHooks {
     }
 
     return version;
+  }
+
+  // A system output protects one gadget, not every gadget sharing its workspace. Rebuild an
+  // incoming update from the final contents of mutable gadget roots so edits to the canonical
+  // Ledger root are dropped while changes to ordinary gadgets remain mergeable.
+  filterManagedGadgetCodeUpdate(update: Uint8Array): Uint8Array | undefined {
+    let records = Array.from(this.storage.gadgets.list());
+    if (!records.some(record => record.systemOutput)) return update;
+
+    let {ydoc: filtered} = this.buildYDoc("current");
+    let proposed = new Y.Doc();
+    Y.applyUpdateV2(proposed, Y.encodeStateAsUpdateV2(filtered));
+    Y.applyUpdateV2(proposed, update);
+    let before = Y.encodeStateVector(filtered);
+    let changed = false;
+
+    filtered.transact(() => {
+      for (let record of records) {
+        if (record.systemOutput) continue;
+        let rootName = this.gadgetRootName(record.id);
+        let target = filtered.getMap<Y.Text>(rootName);
+        let source = proposed.getMap<Y.Text>(rootName);
+
+        for (let name of Array.from(target.keys())) {
+          if (!source.has(name)) {
+            target.delete(name);
+            changed = true;
+          }
+        }
+        for (let [name, sourceText] of source) {
+          let content = sourceText.toString();
+          let targetText = target.get(name);
+          if (targetText?.toString() === content) continue;
+          if (!targetText) {
+            targetText = new Y.Text();
+            target.set(name, targetText);
+          } else if (targetText.length > 0) {
+            targetText.delete(0, targetText.length);
+          }
+          if (content) targetText.insert(0, content);
+          changed = true;
+        }
+      }
+    });
+
+    return changed ? Y.encodeStateAsUpdateV2(filtered, before) : undefined;
   }
 
   makeBindingLoopback(target: BindingLoopbackTarget, caller: GatekeeperCaller) {
@@ -7735,7 +7783,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   async createGadget(title: string, chatId?: number, bindingName?: string)
       : Promise<RpcStub<GadgetClient>> {
-    this.impl.assertWorkspaceMutable();
     // When creating within a chat, names already claimed in that chat's scope (its frozen seed
     // plus log-derived bindings) are off-limits too: the chat's binding map is keyed by name,
     // so on replay the existing binding would win and the new gadget would never be addressable
@@ -7878,9 +7925,9 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async updateCode(update: Uint8Array, chatId?: number): Promise<void> {
-    this.impl.assertWorkspaceMutable();
     if (chatId === undefined) {
-      this.impl.updateCode(update);
+      let filtered = this.impl.filterManagedGadgetCodeUpdate(update);
+      if (filtered) this.impl.updateCode(filtered);
       return;
     }
 
@@ -8711,7 +8758,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   async mergeChanges(chatId: number, mergeThrough: number | null,
                      options?: { includeDraft?: boolean }): Promise<void> {
-    this.impl.assertWorkspaceMutable();
     let userMeta = await this.#clientUser.getChatContext(null);
 
     let meta = this.impl.assertChatNotActive(chatId);
@@ -8746,10 +8792,11 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     // an edge becomes visible to mainline loads and the derived workspace default binding list.
     for (let gadget of this.impl.storage.gadgets.list()) {
       let promoted = false;
-      for (let edge of Object.values(gadget.bindings)) {
+      for (let [name, edge] of Object.entries(gadget.bindings)) {
         if (edge.pending?.chatId === chatId && edge.pending.sequence !== undefined &&
             edge.pending.sequence <= mergeThrough) {
-          delete edge.pending;
+          if (gadget.systemOutput) delete gadget.bindings[name];
+          else delete edge.pending;
           promoted = true;
         }
       }
@@ -8783,8 +8830,11 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     // bump the version counter so cached workers reload with the promoted records visible.
     let codeUpdates = updates.map(up => up.update)
         .filter((up): up is Uint8Array => up !== undefined);
-    let version = codeUpdates.length > 0
-        ? this.impl.updateCode(Y.mergeUpdatesV2(codeUpdates))
+    let filteredCodeUpdate = codeUpdates.length > 0
+        ? this.impl.filterManagedGadgetCodeUpdate(Y.mergeUpdatesV2(codeUpdates))
+        : undefined;
+    let version = filteredCodeUpdate
+        ? this.impl.updateCode(filteredCodeUpdate)
         : this.impl.bumpVersion();
     let timestamp = this.impl.getChatTimestamp();
 
@@ -8806,7 +8856,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     // Maybe generate gadget title if this was the first accepted code. (A merge that accepted no
     // code -- creations/binding additions only -- doesn't count: it writes no code version, so
     // the first *code* merge after it still sees isFirstChange and generates the title then.)
-    if (isFirstChange && codeUpdates.length > 0 && userMeta.quickModel) {
+    if (isFirstChange && filteredCodeUpdate && userMeta.quickModel) {
       this.impl.generateGadgetTitle(chatId, userMeta.quickModel, userMeta.profile);
     }
     this.impl.recordGadgetAnalytics({
@@ -9545,7 +9595,6 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
   }
 
   async remove(): Promise<void> {
-    this.impl.assertWorkspaceMutable();
     return this.impl.removeGadget(this.id);
   }
 

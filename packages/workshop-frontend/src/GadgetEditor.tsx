@@ -480,16 +480,13 @@ export default function GadgetEditor() {
   // restricted overseer denies the ones that matter and returns inert results for the two
   // telemetry subscriptions this component opens, so no client-side gating is needed here.
   const isUseOnly = metadata?.role === 'use'
-  const isManagedSystemOutput = metadata?.systemOutput !== undefined
+  const isManagedWorkspace = metadata?.systemOutput !== undefined
 
   // ── layout ───────────────────────────────────────────────────────────────────
   const [chatWidth, setChatWidth] = useState(getInitialChatWidth)
   const chatWidthRef = useRef(chatWidth)
   const [isResizing, setIsResizing] = useState(false)
   const [activeTab, setActiveTab] = useState<RightTab>('app')
-  useEffect(() => {
-    if (isManagedSystemOutput) setActiveTab('app')
-  }, [isManagedSystemOutput])
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView | null>(() =>
     getStoredWorkspaceView(id)
   )
@@ -677,6 +674,10 @@ export default function GadgetEditor() {
   const selectedGadgetSummary = selectedGadgetId !== null
     ? visibleGadgets.find(g => g.id === selectedGadgetId)
     : undefined
+  const isSelectedManagedSystemOutput = selectedGadgetSummary?.systemOutput !== undefined
+  useEffect(() => {
+    if (isSelectedManagedSystemOutput) setActiveTab('app')
+  }, [isSelectedManagedSystemOutput])
 
   // Lazily normalize legacy "open" preferences once the accepted app list is known. Draft apps
   // remain session-only until accepted; at that point this effect persists them automatically.
@@ -771,7 +772,7 @@ export default function GadgetEditor() {
     chatListReady,
     codeStateReady,
     hasCodeRelatedState,
-    isManagedSystemOutput,
+    isManagedSystemOutput: isSelectedManagedSystemOutput,
   })
 
   // Wait for all initial subscriptions before choosing the new-workspace chat-only layout.
@@ -1360,7 +1361,7 @@ export default function GadgetEditor() {
 
           <span className="text-kumo-inactive flex-shrink-0">/</span>
 
-          {isEditingTitle && !isManagedSystemOutput ? (
+          {isEditingTitle && !isManagedWorkspace ? (
             <div className="flex items-center gap-1">
               <WorkshopInput
                 type="text"
@@ -1394,7 +1395,7 @@ export default function GadgetEditor() {
               <span className="text-[14px] leading-5 font-medium tracking-[-0.25px] text-kumo-default truncate">
                 {metadata.title}
               </span>
-              {!isManagedSystemOutput && (
+              {!isManagedWorkspace && (
                 <WorkshopIconButton
                   onClick={() => setIsEditingTitle(true)}
                   className="!h-7 !w-7 flex-shrink-0"
@@ -1436,7 +1437,7 @@ export default function GadgetEditor() {
 
           {connectionLost && <ReconnectingChip />}
 
-          {!isManagedSystemOutput && (
+          {!isManagedWorkspace && (
             <>
               <WorkshopIconButton
                 onClick={() => setShareModalOpen(true)}
@@ -1606,7 +1607,7 @@ export default function GadgetEditor() {
                       onClick={() => setActivityView(tab.value)}
                     />
                   ))
-                  : rightTabs(selectedGadgetSummary?.output, isManagedSystemOutput).map(tab => (
+                  : rightTabs(selectedGadgetSummary?.output, isSelectedManagedSystemOutput).map(tab => (
                     <PaneTab
                       key={tab.value}
                       active={activeTab === tab.value}
@@ -1699,7 +1700,7 @@ export default function GadgetEditor() {
               )}
             </div>
 
-            {!isManagedSystemOutput && <div className={activeTab === 'code' ? 'h-full' : 'hidden'}>
+            {!isSelectedManagedSystemOutput && <div className={activeTab === 'code' ? 'h-full' : 'hidden'}>
               {overseer && selectedFilesRoot !== undefined ? (
                 <GadgetCodeInterface
                   overseer={overseer.stub}
@@ -1720,7 +1721,7 @@ export default function GadgetEditor() {
               )}
             </div>}
 
-            {!isManagedSystemOutput && <div className={activeTab === 'connections' ? 'h-full overflow-auto' : 'hidden'}>
+            {!isSelectedManagedSystemOutput && <div className={activeTab === 'connections' ? 'h-full overflow-auto' : 'hidden'}>
               {overseer && selectedGadgetStub ? (
                 <Connections
                   key={selectedGadgetId}
@@ -1752,7 +1753,7 @@ export default function GadgetEditor() {
             onExpandedChange={handleWorkpieceRailExpandedChange}
             onSelect={handleSelectWorkpiece}
             onRename={handleRenameWorkpiece}
-            renamable={!isManagedSystemOutput}
+            renamable={!isManagedWorkspace}
             pendingActivityCount={pendingActionsCount}
             onOpenActivity={() => openActivity(pendingActionsCount > 0 ? 'review' : 'history')}
           />
@@ -1777,7 +1778,7 @@ export default function GadgetEditor() {
       )}
 
       {/* Share modal */}
-      {!isManagedSystemOutput && overseer && metadata && (
+      {!isManagedWorkspace && overseer && metadata && (
         <>
           <ShareModal
             open={shareModalOpen}
@@ -1799,7 +1800,7 @@ export default function GadgetEditor() {
         </>
       )}
 
-      {!isManagedSystemOutput && (
+      {!isManagedWorkspace && (
         <DeleteConfirmationDialog
           open={deleteDialogOpen}
           title="Delete workspace?"

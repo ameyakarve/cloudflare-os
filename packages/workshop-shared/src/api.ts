@@ -2962,6 +2962,9 @@ export type WorkpieceSummary = {
    */
   output?: BlueprintOutput;
 
+  /** Trusted deployment marker. Only this specific workpiece is immutable. */
+  systemOutput?: "ledger";
+
   /**
    * The name of the Y.Doc root map that holds this workpiece's files, if it owns files (see
    * Overseer.subscribeToCode). For most gadgets this is the decimal workpiece ID; the gadget

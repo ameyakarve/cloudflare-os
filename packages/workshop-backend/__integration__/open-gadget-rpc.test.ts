@@ -223,7 +223,7 @@ describe("workspace session across a user-DO-only reset", () => {
 });
 
 describe("deployment-managed Ledger workspace", () => {
-  it("surfaces managed metadata and rejects workspace and gadget mutations", async () => {
+  it("protects the canonical gadget without freezing the whole workspace", async () => {
     using publicApi = await connect();
     const account = await createAccount(publicApi, "managedledger");
     const userId = exports.UserDurableObject.idFromName(account.username).toString();
@@ -251,9 +251,6 @@ describe("deployment-managed Ledger workspace", () => {
 
     const expected = "This Ledger workspace is managed by the platform and cannot be modified.";
     expect((await rejection(workspace.setTitle("Renamed"))).message).toBe(expected);
-    expect((await rejection(workspace.createGadget("Extra"))).message).toBe(expected);
-    expect((await rejection(workspace.updateCode(new Uint8Array([0])))).message).toBe(expected);
-    expect((await rejection(workspace.mergeChanges(999, null))).message).toBe(expected);
     expect((await rejection(workspace.deleteSelf())).message).toBe(expected);
     expect((await rejection(user.updateTitle(workspaceIdString, "Renamed"))).message).toBe(expected);
     expect((await rejection(user.deleteGadget(workspaceIdString))).message).toBe(expected);
@@ -263,6 +260,26 @@ describe("deployment-managed Ledger workspace", () => {
     expect((await rejection(gadget.bind("TEST", 999))).message).toBe(expected);
     expect((await rejection(gadget.createBlueprint())).message).toBe(expected);
     expect((await rejection(gadget.remove())).message).toBe(expected);
+
+    // The immutable boundary is the canonical gadget, not the whole workspace. A second gadget's
+    // draft can be accepted while an attempted edit to the Ledger root in the same Yjs update is
+    // filtered out.
+    const ledgerBundleBefore = await gadget.getUiBundle();
+    using secondary = await workspace.createGadget("Secondary");
+    const secondaryId = await secondary.getId();
+    const proposed = new Y.Doc();
+    const secondaryClient = new Y.Text();
+    secondaryClient.insert(0, "export default function App() { return 'secondary'; }");
+    proposed.getMap<Y.Text>(String(secondaryId)).set("client.js", secondaryClient);
+    const ledgerClient = new Y.Text();
+    ledgerClient.insert(0, "throw new Error('tampered');");
+    proposed.getMap<Y.Text>().set("client.js", ledgerClient);
+
+    const chatId = await workspace.newChat("Edit secondary", null);
+    await workspace.updateCode(Y.encodeStateAsUpdateV2(proposed), chatId);
+    await workspace.mergeChanges(chatId, null, {includeDraft: true});
+    expect((await secondary.getUiBundle())?.jsCode).toContain("secondary");
+    expect(await gadget.getUiBundle()).toEqual(ledgerBundleBefore);
 
     // Presentation preferences remain user-owned even though the workspace is managed.
     await workspace.setPinned(true);
