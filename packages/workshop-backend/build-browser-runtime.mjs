@@ -81,6 +81,7 @@ const gadgetClientUpgradeBytes = process.env.GADGET_CLIENT_UPGRADE_PATH
 assertContains(kumoRuntimeBytes, ".Kumo=Object.freeze", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Button:", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Textarea:", "Kumo browser runtime");
+assertContains(kumoRuntimeBytes, "BeancountEditor:", "Gadget editor runtime");
 assertContains(graphRuntimeBytes, ".GadgetGraph=Object.freeze", "Gadget graph runtime");
 assertContains(graphRuntimeBytes, "layoutDirected", "Gadget graph runtime");
 assertContains(geoRuntimeBytes, ".GadgetGeo=Object.freeze", "Gadget geo runtime");

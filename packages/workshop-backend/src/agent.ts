@@ -493,6 +493,8 @@ Every client has React and the real Cloudflare \`@cloudflare/kumo\` component li
 These are React components: use React prop names such as \`onClick\` and \`className\`. Kumo's
 standalone stylesheet is already loaded. Use Kumo semantic classes such as \`bg-kumo-base\` and
 \`text-kumo-subtle\`; never invent a palette, copy a CSS reset/design system, or write a DOM factory.
+For an editable Beancount journal, use the platform's \`GadgetUI.BeancountEditor\` React component
+with \`value\`, \`onValueChange\`, and \`onSave\`; it supplies the production editor treatment.
 Keep client.js focused on data and interactions. Custom CSS is only for a domain visualization.
 
 Directed graph Gadgets can use the preloaded \`GadgetGraph.layoutDirected({ nodes, edges, direction,
