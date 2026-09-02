@@ -7944,7 +7944,9 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   async newGatekeeper(accountId: number, resourceUrl: string)
       : Promise<GatekeeperClient<any> | null> {
-    this.impl.assertWorkspaceMutable();
+    // A managed output owns its gadget source, not the user's chat capabilities. Connections
+    // granted through requestConnection must remain usable by the agent without changing the
+    // canonical Ledger gadget itself.
     let {class: cls, vendorId, typeUrlPattern} =
         await this.#clientUser.getGatekeeperClassFor(accountId, resourceUrl);
     let creationSpec: GatekeeperCreationSpec = {
@@ -7959,7 +7961,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async newAiModelGatekeeper(modelId: string): Promise<GatekeeperClient<any>> {
-    this.impl.assertWorkspaceMutable();
     let chatMeta = await this.#clientUser.getChatContext(modelId);
     let props: LanguageModelGatekeeperProps = {
       displayName: chatMeta.aiModel!.profile.name,
@@ -7986,7 +7987,6 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async newAgentSpawnerGatekeeper(config: AgentSpawnerConfig): Promise<GatekeeperClient<any>> {
-    this.impl.assertWorkspaceMutable();
     // Validate the configured env: names must be valid binding names and targets must exist --
     // and must not be gadgets still provisional to some chat, which belong to that chat's
     // unaccepted proposal, not (yet) to the workspace. (Spawn-time snapshotting tolerates targets
@@ -9855,7 +9855,6 @@ class GatekeeperClientImpl<Session extends RpcCompatible<Session>>
   }
 
   async remove(): Promise<void> {
-    this.impl.assertWorkspaceMutable();
     let record = this.impl.storage.gatekeepers.get(this.id);
     this.impl.removeGatekeeper(this.id);
     this.impl.recordGadgetAnalytics({
@@ -9881,7 +9880,6 @@ class GatekeeperClientImpl<Session extends RpcCompatible<Session>>
   }
 
   async setTitle(title: string): Promise<void> {
-    this.impl.assertWorkspaceMutable();
     // This changes only the display title used locally within this workspace (resourceTitle is a
     // denormalized copy of the remote resource's title), never the remote resource.
     let record = this.#getRecord();
