@@ -1251,6 +1251,8 @@ export default function GadgetEditor() {
   // ── delete ────────────────────────────────────────────────────────────────────
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [removeGadgetTarget, setRemoveGadgetTarget] = useState<WorkpieceSummary | null>(null)
+  const [isRemovingGadget, setIsRemovingGadget] = useState(false)
 
   const handleDeleteConfirm = async () => {
     if (!overseer) return
@@ -1262,6 +1264,35 @@ export default function GadgetEditor() {
       toasts.add({ title: 'Failed to delete workspace', variant: 'error' })
       setIsDeleting(false)
       setDeleteDialogOpen(false)
+    }
+  }
+
+  const handleRemoveGadgetConfirm = async () => {
+    if (!overseer || !removeGadgetTarget || removeGadgetTarget.systemOutput) return
+    setIsRemovingGadget(true)
+    const target = removeGadgetTarget
+    const targetStub = overseer.stub.getGadget(target.id)
+    try {
+      await targetStub.remove()
+      setRemoveGadgetTarget(null)
+
+      if (selectedGadgetId === target.id) {
+        const remaining = allGadgets.filter(item => item.id !== target.id && item.chatId === undefined)
+        const fallback = remaining.find(item => item.id === metadata?.defaultGadgetId) ?? remaining[0]
+        setActiveTab('app')
+        setWorkspaceVisibility(fallback ? 'open' : 'closed', fallback?.id)
+        navigate({
+          to: '/workspace/$id',
+          params: { id: id! },
+          search: (prev: Record<string, unknown>) => ({ ...prev, w: fallback?.id }),
+          replace: true,
+        })
+      }
+    } catch {
+      toasts.add({ title: 'Failed to remove gadget', variant: 'error' })
+    } finally {
+      targetStub[Symbol.dispose]()
+      setIsRemovingGadget(false)
     }
   }
 
@@ -1638,6 +1669,17 @@ export default function GadgetEditor() {
                 </WorkshopIconButton>
               )}
 
+              {!paneShowsActivity && selectedGadgetSummary && !isSelectedManagedSystemOutput && (
+                <WorkshopIconButton
+                  danger
+                  aria-label={`Remove ${selectedGadgetSummary.title}`}
+                  title="Remove gadget"
+                  onClick={() => setRemoveGadgetTarget(selectedGadgetSummary)}
+                >
+                  <Trash size={16} />
+                </WorkshopIconButton>
+              )}
+
               <WorkshopIconButton
                 aria-label={paneShowsActivity ? 'Close activity' : 'Close gadget pane'}
                 title="Close"
@@ -1753,7 +1795,10 @@ export default function GadgetEditor() {
             onExpandedChange={handleWorkpieceRailExpandedChange}
             onSelect={handleSelectWorkpiece}
             onRename={handleRenameWorkpiece}
-            renamable={!isManagedWorkspace}
+            onRemove={(workpieceId) => {
+              const target = workpieces.get(workpieceId)
+              if (target?.type === 'gadget' && !target.systemOutput) setRemoveGadgetTarget(target)
+            }}
             pendingActivityCount={pendingActionsCount}
             onOpenActivity={() => openActivity(pendingActionsCount > 0 ? 'review' : 'history')}
           />
@@ -1810,6 +1855,17 @@ export default function GadgetEditor() {
           onConfirm={handleDeleteConfirm}
         />
       )}
+
+      <DeleteConfirmationDialog
+        open={removeGadgetTarget !== null}
+        title="Remove gadget?"
+        description={<>This permanently removes <span className="font-medium text-kumo-default">{removeGadgetTarget?.title}</span> from this workspace. You can&apos;t undo this.</>}
+        isDeleting={isRemovingGadget}
+        confirmLabel="Remove"
+        confirmingLabel="Removing..."
+        onOpenChange={(open) => { if (!open) setRemoveGadgetTarget(null) }}
+        onConfirm={handleRemoveGadgetConfirm}
+      />
 
     </div>
   )

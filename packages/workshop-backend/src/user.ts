@@ -122,6 +122,9 @@ export type WorkspaceOutputEntry = {
 
   /** The format the gadget was built as, if it was instantiated from a blueprint declaring one. */
   output?: BlueprintOutput;
+
+  /** Trusted deployment marker. Only this specific output is managed by the deployment. */
+  systemOutput?: "ledger";
 };
 
 type OutputRecord = WorkspaceOutputEntry & {
@@ -921,14 +924,13 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     for (let output of this.storage.outputs.list()) {
       let workspace = this.storage.gadgets.get(output.workspaceId);
       if (!workspace || !isFullyCreated(workspace)) continue;
-      let systemOutput = this.systemOutputForWorkspace(output.workspaceId);
       result.push({
         workspaceId: output.workspaceId,
         workpieceId: output.workpieceId,
         ...(output.output ? {output: output.output} : {}),
         title: output.title,
         workspaceTitle: workspace.title,
-        ...(systemOutput ? {systemOutput} : {}),
+        ...(output.systemOutput ? {systemOutput: output.systemOutput} : {}),
         created: output.created,
         lastActive: workspace.lastActive,
         ...(workspace.owner ? {owner: workspace.owner} : {}),

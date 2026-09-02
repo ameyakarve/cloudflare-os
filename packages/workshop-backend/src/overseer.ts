@@ -3495,6 +3495,7 @@ class OverseerImpl implements AgentHooks {
         title: gadget.title,
         created: gadget.created,
         ...(gadget.output ? {output: gadget.output} : {}),
+        ...(gadget.systemOutput ? {systemOutput: gadget.systemOutput} : {}),
       });
     }
     return entries;
