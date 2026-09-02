@@ -56,6 +56,7 @@ import WorkspaceOpenErrorPage from './components/WorkspaceOpenErrorPage'
 import { useWorkspaceOpen } from './useWorkspaceOpen'
 import { reportIssue } from './errorReporting'
 import GadgetExportMenu from './GadgetExportMenu'
+import { isWorkspaceLayoutReady } from './workspaceLayout'
 
 const NO_GADGETS: ReadonlySet<WorkpieceId> = new Set()
 
@@ -763,7 +764,15 @@ export default function GadgetEditor() {
   const hasCodeRelatedState = effectiveHasCode === true
     || hasAnyProposedChanges
     || streamingProposedChanges !== undefined
-  const layoutModeReady = chatListReady && (codeStateReady || hasCodeRelatedState)
+  // Managed outputs intentionally do not mount GadgetCodeInterface, so they cannot wait for its
+  // onHasCodeChange callback. Their app is provisioned by the system and can render as soon as the
+  // conversation list is ready.
+  const layoutModeReady = isWorkspaceLayoutReady({
+    chatListReady,
+    codeStateReady,
+    hasCodeRelatedState,
+    isManagedSystemOutput,
+  })
 
   // Wait for all initial subscriptions before choosing the new-workspace chat-only layout.
   const simpleMode = layoutModeReady && !hasCodeRelatedState && singleInitialChat
