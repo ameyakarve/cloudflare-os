@@ -23,11 +23,18 @@ const LEGACY_AWARD_EXPLORERS = [
     "Published and observed pricing, not live seats",
   ],
 ];
-const LEGACY_LEDGER_CLIENTS = [[
-  "const { Badge, Banner, Button, Loader, Surface, Text, Textarea } = Kumo;",
-  "h(Textarea, {",
-  "Your canonical MilesVault journal",
-]];
+const LEGACY_LEDGER_CLIENTS = [
+  [
+    "const { Badge, Banner, Button, Loader, Surface, Text, Textarea } = Kumo;",
+    "h(Textarea, {",
+    "Your canonical MilesVault journal",
+  ],
+  [
+    "const { Banner, Button, Loader, Surface, Text } = Kumo;",
+    "const { BeancountEditor } = GadgetUI;",
+    'h(Text, { size: "sm" }, "All accounts")',
+  ],
+];
 
 /** Replaces exact deployment-owned Gadget snapshots at render time without touching user code. */
 export function upgradeLegacyGadgetClient(

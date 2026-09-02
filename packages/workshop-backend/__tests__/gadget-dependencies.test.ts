@@ -75,7 +75,16 @@ function App() { return h(Textarea, { value: "Your canonical MilesVault journal"
 `;
     const modernLedger = "const { BeancountEditor } = GadgetUI;";
     expect(upgradeLegacyGadgetClient(oldLedger, "award", modernLedger)).toBe(modernLedger);
+    const firstCodeMirrorLedger = `
+const { Banner, Button, Loader, Surface, Text } = Kumo;
+const { BeancountEditor } = GadgetUI;
+function App() { return h(Text, { size: "sm" }, "All accounts"); }
+`;
+    expect(upgradeLegacyGadgetClient(firstCodeMirrorLedger, "award", modernLedger))
+      .toBe(modernLedger);
     expect(upgradeLegacyGadgetClient("h(Textarea, { value: userCode });", "award", modernLedger))
       .toBe("h(Textarea, { value: userCode });");
+    expect(upgradeLegacyGadgetClient("const { BeancountEditor } = GadgetUI;", "award", modernLedger))
+      .toBe("const { BeancountEditor } = GadgetUI;");
   });
 });

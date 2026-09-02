@@ -1,23 +1,33 @@
 import * as React from "react";
 import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import {
+  bracketMatching,
+  foldKeymap,
   HighlightStyle,
-  LRLanguage,
-  LanguageSupport,
+  indentOnInput,
   syntaxHighlighting,
 } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
+import { searchKeymap } from "@codemirror/search";
 import {
+  dropCursor,
   EditorView,
   highlightActiveLine,
   highlightActiveLineGutter,
+  highlightSpecialChars,
   keymap,
   lineNumbers,
+  rectangularSelection,
 } from "@codemirror/view";
-import { styleTags, tags } from "@lezer/highlight";
-import { parser as beancountParser } from "lezer-beancount";
+import { tags } from "@lezer/highlight";
+import {
+  beancountCompletion,
+  beancountLanguage,
+  type BeancountCompletionData,
+} from "./beancount-completion.js";
 import {
   Badge,
   Banner,
@@ -30,6 +40,7 @@ import {
   Input,
   LayerCard,
   Loader,
+  Popover,
   Select,
   Surface,
   Tabs,
@@ -56,6 +67,7 @@ runtimeGlobal.Kumo = Object.freeze({
   Input,
   LayerCard,
   Loader,
+  Popover,
   Select,
   Surface,
   Tabs,
@@ -64,21 +76,6 @@ runtimeGlobal.Kumo = Object.freeze({
   cn,
 });
 runtimeGlobal.kumo = runtimeGlobal.Kumo;
-
-const beancountLanguage = new LanguageSupport(LRLanguage.define({
-  parser: beancountParser.configure({
-    props: [styleTags({
-      Date: tags.literal,
-      TxnFlag: tags.operator,
-      String: tags.string,
-      Account: tags.variableName,
-      Number: tags.number,
-      Currency: tags.unit,
-      "note open close balance pad document event price commodity query custom option include plugin pushtag poptag":
-        tags.keyword,
-    })],
-  }),
-}));
 
 // Reuse the Context library's established CodeMirror treatment. Only the Beancount token mapping is
 // MilesVault-specific; editor chrome, spacing, scrolling, selection and theme colors stay OS-native.
@@ -132,6 +129,21 @@ const beancountThemeLight = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
     backgroundColor: "#b3d4ff",
   },
+  ".cm-tooltip": {
+    backgroundColor: "var(--color-kumo-overlay)",
+    border: "1px solid var(--color-kumo-line)",
+    color: "#1f1d1a",
+    borderRadius: "8px",
+    overflow: "hidden",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: monoFont, fontSize: "12px" },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+    backgroundColor: "var(--color-kumo-fill)",
+    color: "#1f1d1a",
+  },
+  ".cm-completionDetail": { color: "#6b6157", fontStyle: "normal" },
+  ".cm-completionMatchedText": { color: "#3a72c9", fontWeight: "700", textDecoration: "none" },
+  ".cm-search": { backgroundColor: "var(--color-kumo-overlay)", color: "#1f1d1a" },
 }, { dark: false });
 
 const beancountThemeDark = EditorView.theme({
@@ -161,6 +173,21 @@ const beancountThemeDark = EditorView.theme({
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
     backgroundColor: "#4b3d66",
   },
+  ".cm-tooltip": {
+    backgroundColor: "var(--color-kumo-overlay)",
+    border: "1px solid var(--color-kumo-line)",
+    color: "#e8e6f0",
+    borderRadius: "8px",
+    overflow: "hidden",
+  },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: monoFont, fontSize: "12px" },
+  ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
+    backgroundColor: "var(--color-kumo-fill)",
+    color: "#e8e6f0",
+  },
+  ".cm-completionDetail": { color: "#b9b5c8", fontStyle: "normal" },
+  ".cm-completionMatchedText": { color: "#93c5fd", fontWeight: "700", textDecoration: "none" },
+  ".cm-search": { backgroundColor: "var(--color-kumo-overlay)", color: "#e8e6f0" },
 }, { dark: true });
 
 const beancountThemeExtensions = (mode: "light" | "dark") => mode === "dark"
@@ -174,6 +201,12 @@ type BeancountEditorProps = {
   readOnly?: boolean;
   className?: string;
   ariaLabel?: string;
+  completionData?: BeancountCompletionData;
+};
+
+const emptyCompletionData: BeancountCompletionData = {
+  ledgerAccounts: [],
+  catalogueAccounts: [],
 };
 
 /** Production-grade journal editor supplied by the platform so Gadget source stays declarative. */
@@ -184,6 +217,7 @@ function BeancountEditor({
   readOnly = false,
   className,
   ariaLabel = "Beancount journal",
+  completionData = emptyCompletionData,
 }: BeancountEditorProps): ReactNode {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const viewRef = React.useRef<EditorView | null>(null);
@@ -192,6 +226,7 @@ function BeancountEditor({
   const onSaveRef = React.useRef(onSave);
   const readOnlyCompartmentRef = React.useRef(new Compartment());
   const themeCompartmentRef = React.useRef(new Compartment());
+  const completionCompartmentRef = React.useRef(new Compartment());
   onValueChangeRef.current = onValueChange;
   onSaveRef.current = onSave;
 
@@ -206,8 +241,16 @@ function BeancountEditor({
           lineNumbers(),
           highlightActiveLine(),
           highlightActiveLineGutter(),
+          highlightSpecialChars(),
           history(),
+          dropCursor(),
+          EditorState.allowMultipleSelections.of(true),
+          indentOnInput(),
+          bracketMatching(),
+          closeBrackets(),
+          rectangularSelection(),
           beancountLanguage,
+          completionCompartmentRef.current.of(beancountCompletion(completionData)),
           themeCompartmentRef.current.of(beancountThemeExtensions(
             document.documentElement.dataset.mode === "dark" ? "dark" : "light",
           )),
@@ -218,8 +261,13 @@ function BeancountEditor({
             EditorView.editable.of(!readOnly),
           ]),
           keymap.of([
+            ...closeBracketsKeymap,
             ...defaultKeymap,
+            ...searchKeymap,
             ...historyKeymap,
+            ...foldKeymap,
+            ...completionKeymap,
+            indentWithTab,
             {
               key: "Mod-s",
               preventDefault: true,
@@ -262,6 +310,14 @@ function BeancountEditor({
       EditorView.editable.of(!readOnly),
     ]) });
   }, [readOnly]);
+
+  React.useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      effects: completionCompartmentRef.current.reconfigure(beancountCompletion(completionData)),
+    });
+  }, [completionData]);
 
   React.useEffect(() => {
     const apply = () => viewRef.current?.dispatch({

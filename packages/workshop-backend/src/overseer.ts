@@ -197,6 +197,13 @@ type MilesVaultLedgerEntryRef = {
 type MilesVaultLedgerDo = {
   listEntries(): Promise<{rows: MilesVaultLedgerEntry[]}>;
   replaceBuffer(input: {knownIds: MilesVaultLedgerEntryRef[], buffer: string}): Promise<unknown>;
+  ledger_snapshot(): Promise<{
+    accounts: Array<{account: string, close_date: number | null}>;
+  }>;
+};
+
+type MilesVaultEditorSupport = {
+  accountSuggestions(): Promise<{accounts: string[]}>;
 };
 
 type MilesVaultLedgerNamespace = {
@@ -224,6 +231,24 @@ export class MilesVaultLedgerBinding
   /** Load the canonical journal rows for the owning MilesVault user. */
   async listEntries(): Promise<{rows: MilesVaultLedgerEntry[]}> {
     return (await this.#ledger()).listEntries();
+  }
+
+  /** Hydrate the same ledger-first, graph-catalogue-second account completion used in production. */
+  async completionData(): Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}> {
+    let support = (this.env as unknown as {MILESVAULT_EDITOR_SUPPORT: MilesVaultEditorSupport})
+        .MILESVAULT_EDITOR_SUPPORT;
+    let [snapshot, catalogue] = await Promise.all([
+      (await this.#ledger()).ledger_snapshot(),
+      support?.accountSuggestions().catch(() => ({accounts: []})) ?? Promise.resolve({accounts: []}),
+    ]);
+    let clean = (values: string[]) => [...new Set(values.filter(value =>
+      typeof value === "string" && value.length > 0 && value.length <= 512))].slice(0, 10_000);
+    return {
+      ledgerAccounts: clean(snapshot.accounts
+          .filter(account => account.close_date === null)
+          .map(account => account.account)),
+      catalogueAccounts: clean(catalogue.accounts),
+    };
   }
 
   /** Run MilesVault's existing OCC-checked, atomic journal replacement. */
