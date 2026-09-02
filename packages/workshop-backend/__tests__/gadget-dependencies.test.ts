@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { upgradeLegacyGadgetClient, withGadgetKumo } from "../src/gadget-kumo";
+import {
+  upgradeLegacyGadgetClient,
+  upgradeLegacyLedgerServer,
+  withGadgetKumo,
+} from "../src/gadget-kumo";
 import {
   assertGadgetBindingsAvailable,
   missingGadgetBindings,
@@ -86,5 +90,30 @@ function App() { return h(Text, { size: "sm" }, "All accounts"); }
       .toBe("h(Textarea, { value: userCode });");
     expect(upgradeLegacyGadgetClient("const { BeancountEditor } = GadgetUI;", "award", modernLedger))
       .toBe("const { BeancountEditor } = GadgetUI;");
+  });
+
+  it("adds completion to a saved Ledger server without changing other gadget servers", () => {
+    const oldLedger = `
+import { DurableObject } from "cloudflare:workers";
+export class Gadget extends DurableObject {
+  async listEntries() {
+    return this.env.MILESVAULT_LEDGER.listEntries();
+  }
+
+  async replaceBuffer(knownIds, buffer) {
+    return this.env.MILESVAULT_LEDGER.replaceBuffer({ knownIds, buffer });
+  }
+}`;
+    const upgraded = upgradeLegacyLedgerServer(oldLedger);
+    expect(upgraded).toContain("async completionData() {");
+    expect(upgraded).toContain("return this.env.MILESVAULT_LEDGER.completionData();");
+    expect(upgradeLegacyLedgerServer(upgraded)).toBe(upgraded);
+
+    const userServer = `export class Gadget {
+      async replaceBuffer(knownIds, buffer) {
+        return this.env.USER_LEDGER.replaceBuffer({ knownIds, buffer });
+      }
+    }`;
+    expect(upgradeLegacyLedgerServer(userServer)).toBe(userServer);
   });
 });

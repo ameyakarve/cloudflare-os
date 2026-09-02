@@ -49,6 +49,26 @@ export function upgradeLegacyGadgetClient(
   return clientCode;
 }
 
+const LEGACY_LEDGER_REPLACE_METHOD = `  async replaceBuffer(knownIds, buffer) {
+    return this.env.MILESVAULT_LEDGER.replaceBuffer({ knownIds, buffer });
+  }`;
+
+/** Adds the completion RPC to saved deployment-owned Ledger servers created before it existed. */
+export function upgradeLegacyLedgerServer(serverCode: string): string {
+  if (serverCode.includes("async completionData()") ||
+      !serverCode.includes("return this.env.MILESVAULT_LEDGER.listEntries();") ||
+      !serverCode.includes(LEGACY_LEDGER_REPLACE_METHOD)) return serverCode;
+
+  return serverCode.replace(
+    LEGACY_LEDGER_REPLACE_METHOD,
+    `  async completionData() {
+    return this.env.MILESVAULT_LEDGER.completionData();
+  }
+
+${LEGACY_LEDGER_REPLACE_METHOD}`,
+  );
+}
+
 /** Prefixes a Gadget client with the real Cloudflare Kumo React library and standalone CSS. */
 export function withGadgetKumo(clientCode: string): string {
   clientCode = upgradeLegacyGadgetClient(clientCode);

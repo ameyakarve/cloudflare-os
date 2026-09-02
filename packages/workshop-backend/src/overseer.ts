@@ -48,7 +48,7 @@ import {
 } from "./chat-attachment-validation";
 import { renderGadgetInBrowser } from "./browser-export";
 import { assertGadgetBindingsAvailable } from "./gadget-dependencies";
-import { withGadgetKumo } from "./gadget-kumo";
+import { upgradeLegacyLedgerServer, withGadgetKumo } from "./gadget-kumo";
 import {
   defaultExportFormats,
   exportServerFormat,
@@ -2522,6 +2522,9 @@ class OverseerImpl implements AgentHooks {
       }
 
       const gadget = this.getGadgetRecord(gadgetId);
+      if (gadget.systemOutput === "ledger" && modules["server.js"]) {
+        modules["server.js"] = upgradeLegacyLedgerServer(modules["server.js"]);
+      }
       const loaderEnv = this.getEnvForLoader(
         gadgetId, {from: "gadget", chatId, gadgetId}, chatId,
       ) as Record<string, unknown>;
