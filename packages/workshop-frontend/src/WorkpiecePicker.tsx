@@ -22,6 +22,7 @@ interface WorkpiecePickerProps {
   onExpandedChange: (expanded: boolean) => void
   onSelect: (id: WorkpieceId) => void
   onRename: (id: WorkpieceId, title: string) => void
+  renamable?: boolean
   pendingActivityCount: number
   onOpenActivity: () => void
 }
@@ -35,6 +36,7 @@ export default function WorkpiecePicker({
   onExpandedChange,
   onSelect,
   onRename,
+  renamable = true,
   pendingActivityCount,
   onOpenActivity,
 }: WorkpiecePickerProps) {
@@ -80,7 +82,7 @@ export default function WorkpiecePicker({
           const isAgentEditing = agentEditingId === gadget.id && !isSelected
           const hasHook = hookedGadgetIds.has(gadget.id)
 
-          if (expanded && editing?.id === gadget.id) {
+          if (renamable && expanded && editing?.id === gadget.id) {
             return (
               <div key={gadget.id} className="flex items-center gap-1 py-0.5">
                 <WorkshopInput
@@ -169,7 +171,7 @@ export default function WorkpiecePicker({
                   )}
                 </button>
               </Tooltip>
-              {expanded && (
+              {renamable && expanded && (
                 <WorkshopIconButton
                   onClick={() => setEditing({ id: gadget.id, value: gadget.title })}
                   className="!h-6 !w-6 flex-shrink-0 opacity-0 transition-opacity duration-150 ease-out group-hover/workpiece:opacity-100 focus-visible:opacity-100"

@@ -280,9 +280,11 @@ export interface AgentHooks {
    * means the workspace's default gadget; throws an agent-readable error if there is none. When
    * `mustExist` is set, additionally throws if the gadget isn't currently registered -- or is
    * provisional to a chat other than `forChatId` -- (used by live file tools; history replay
-   * omits it so old edits to since-deleted gadgets still resolve).
+   * omits it so old edits to since-deleted gadgets still resolve). `forMutation` additionally
+   * rejects deployment-managed workpieces while preserving read access to their source.
    */
-  resolveWorkpieceRoot(workpieceId?: WorkpieceId, mustExist?: boolean, forChatId?: number)
+  resolveWorkpieceRoot(workpieceId?: WorkpieceId, mustExist?: boolean, forChatId?: number,
+                       forMutation?: boolean)
       : {workpieceId: WorkpieceId, rootName: string};
 
   /**
@@ -2532,7 +2534,7 @@ export async function runAgent(
       execute: async (toolCallId, {workpiece, filename, content}) => {
         try {
           let resolved =
-              hooks.resolveWorkpieceRoot(resolveToolWorkpieceId(workpiece), true, chatId);
+              hooks.resolveWorkpieceRoot(resolveToolWorkpieceId(workpiece), true, chatId, true);
           applyPendingEditToYdoc(getSessionYDoc(), {
             toolName: "writeFile",
             rootName: resolved.rootName,
@@ -2576,7 +2578,7 @@ export async function runAgent(
       execute: async (toolCallId, {workpiece, filename, textToReplace, replacement}) => {
         try {
           let resolved =
-              hooks.resolveWorkpieceRoot(resolveToolWorkpieceId(workpiece), true, chatId);
+              hooks.resolveWorkpieceRoot(resolveToolWorkpieceId(workpiece), true, chatId, true);
           if (!filesRead.has(fileKey(resolved.workpieceId, filename))) {
             throw new Error("You must read a file before you can edit it.");
           }

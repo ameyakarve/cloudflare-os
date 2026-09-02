@@ -10,6 +10,7 @@ import {
   type PublicApi,
 } from "@gadgets/workshop-shared/api";
 import { describe, expect, it } from "vitest";
+import * as Y from "yjs";
 
 type CodedError = Error & { code?: unknown };
 
@@ -218,5 +219,53 @@ describe("workspace session across a user-DO-only reset", () => {
     // GadgetClient capability that must also be born with the fresh-stub design.
     using gadget = await workspace.createGadget("post-reset gadget");
     expect(await gadget.getTitle()).toBe("post-reset gadget");
+  });
+});
+
+describe("deployment-managed Ledger workspace", () => {
+  it("surfaces managed metadata and rejects workspace and gadget mutations", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, "managedledger");
+    const userId = exports.UserDurableObject.idFromName(account.username).toString();
+    const workspaceId = exports.OverseerDurableObject.newUniqueId();
+    const workspaceIdString = workspaceId.toString();
+    const user = exports.UserDurableObject.get(
+      exports.UserDurableObject.idFromName(account.username));
+    await user.claimSystemOutput("ledger", workspaceIdString, "Ledger");
+
+    const overseerDo = exports.OverseerDurableObject.get(workspaceId);
+    using workspace = await overseerDo.open(userId, account.username, () => {});
+    const source = new Y.Doc();
+    await overseerDo.initializeFromBlueprint(
+      Y.encodeStateAsUpdateV2(source),
+      "Ledger",
+      {id: "ledger", noun: "Ledger", plural: "Ledgers", icon: "notebook"},
+      "ledger",
+    );
+
+    const metadata = await workspace.getMetadata();
+    expect(metadata.systemOutput).toBe("ledger");
+    expect(metadata.defaultGadgetId).toEqual(expect.any(Number));
+    expect((await user.listGadgets()).find(gadget => gadget.id === workspaceIdString))
+      .toMatchObject({title: "Ledger", systemOutput: "ledger"});
+
+    const expected = "This Ledger workspace is managed by the platform and cannot be modified.";
+    expect((await rejection(workspace.setTitle("Renamed"))).message).toBe(expected);
+    expect((await rejection(workspace.createGadget("Extra"))).message).toBe(expected);
+    expect((await rejection(workspace.updateCode(new Uint8Array([0])))).message).toBe(expected);
+    expect((await rejection(workspace.mergeChanges(999, null))).message).toBe(expected);
+    expect((await rejection(workspace.deleteSelf())).message).toBe(expected);
+    expect((await rejection(user.updateTitle(workspaceIdString, "Renamed"))).message).toBe(expected);
+    expect((await rejection(user.deleteGadget(workspaceIdString))).message).toBe(expected);
+
+    using gadget = await workspace.getGadget(metadata.defaultGadgetId!);
+    expect((await rejection(gadget.setTitle("Renamed"))).message).toBe(expected);
+    expect((await rejection(gadget.bind("TEST", 999))).message).toBe(expected);
+    expect((await rejection(gadget.createBlueprint())).message).toBe(expected);
+    expect((await rejection(gadget.remove())).message).toBe(expected);
+
+    // Presentation preferences remain user-owned even though the workspace is managed.
+    await workspace.setPinned(true);
+    expect((await user.getGadget(workspaceIdString))?.pinned).toBe(true);
   });
 });

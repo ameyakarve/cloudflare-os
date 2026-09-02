@@ -112,6 +112,7 @@ async function makeTargetOverseer(gadgetId?: number) {
     open: OverseerDurableObject.prototype.open,
     impl: {
       ownerId: "user-id",
+      assertWorkspaceMutable: () => {},
       ensureAmbientCapsules: async () => {},
       markOutputsDirty: () => {},
       joinPresence: () => () => {},

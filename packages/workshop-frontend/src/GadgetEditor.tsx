@@ -162,9 +162,10 @@ function formatHeaderCost(cost: number) {
 
 // The first tab is named after what the selected workpiece is ("Document" for a gadget built from
 // a document blueprint), falling back to "App" when it declares no format.
-function rightTabs(output?: BlueprintOutput): { value: RightTab; label: string }[] {
-  return [
-    { value: 'app', label: formatOf(output).noun },
+function rightTabs(output?: BlueprintOutput, managed = false): { value: RightTab; label: string }[] {
+  const app = { value: 'app' as const, label: formatOf(output).noun }
+  return managed ? [app] : [
+    app,
     { value: 'code', label: 'Code' },
     { value: 'connections', label: 'Connections' },
   ]
@@ -478,12 +479,16 @@ export default function GadgetEditor() {
   // restricted overseer denies the ones that matter and returns inert results for the two
   // telemetry subscriptions this component opens, so no client-side gating is needed here.
   const isUseOnly = metadata?.role === 'use'
+  const isManagedSystemOutput = metadata?.systemOutput !== undefined
 
   // ── layout ───────────────────────────────────────────────────────────────────
   const [chatWidth, setChatWidth] = useState(getInitialChatWidth)
   const chatWidthRef = useRef(chatWidth)
   const [isResizing, setIsResizing] = useState(false)
   const [activeTab, setActiveTab] = useState<RightTab>('app')
+  useEffect(() => {
+    if (isManagedSystemOutput) setActiveTab('app')
+  }, [isManagedSystemOutput])
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView | null>(() =>
     getStoredWorkspaceView(id)
   )
@@ -1346,7 +1351,7 @@ export default function GadgetEditor() {
 
           <span className="text-kumo-inactive flex-shrink-0">/</span>
 
-          {isEditingTitle ? (
+          {isEditingTitle && !isManagedSystemOutput ? (
             <div className="flex items-center gap-1">
               <WorkshopInput
                 type="text"
@@ -1380,14 +1385,16 @@ export default function GadgetEditor() {
               <span className="text-[14px] leading-5 font-medium tracking-[-0.25px] text-kumo-default truncate">
                 {metadata.title}
               </span>
-              <WorkshopIconButton
-                onClick={() => setIsEditingTitle(true)}
-                className="!h-7 !w-7 flex-shrink-0"
-                title="Rename workspace"
-                aria-label="Rename workspace"
-              >
-                <Pencil size={16} />
-              </WorkshopIconButton>
+              {!isManagedSystemOutput && (
+                <WorkshopIconButton
+                  onClick={() => setIsEditingTitle(true)}
+                  className="!h-7 !w-7 flex-shrink-0"
+                  title="Rename workspace"
+                  aria-label="Rename workspace"
+                >
+                  <Pencil size={16} />
+                </WorkshopIconButton>
+              )}
             </div>
           )}
 
@@ -1420,32 +1427,36 @@ export default function GadgetEditor() {
 
           {connectionLost && <ReconnectingChip />}
 
-          <WorkshopIconButton
-            onClick={() => setShareModalOpen(true)}
-            title="Share workspace"
-            aria-label="Share workspace"
-          >
-            <ShareNetwork size={15} />
-          </WorkshopIconButton>
+          {!isManagedSystemOutput && (
+            <>
+              <WorkshopIconButton
+                onClick={() => setShareModalOpen(true)}
+                title="Share workspace"
+                aria-label="Share workspace"
+              >
+                <ShareNetwork size={15} />
+              </WorkshopIconButton>
 
-          <WorkshopIconButton
-            onClick={() => setBlueprintModalOpen(true)}
-            disabled={!selectedGadgetStub}
-            title="Blueprints"
-            aria-label="Blueprints"
-          >
-            <Blueprint size={16} />
-          </WorkshopIconButton>
+              <WorkshopIconButton
+                onClick={() => setBlueprintModalOpen(true)}
+                disabled={!selectedGadgetStub}
+                title="Blueprints"
+                aria-label="Blueprints"
+              >
+                <Blueprint size={16} />
+              </WorkshopIconButton>
 
-          {!metadata.owner && (
-            <WorkshopIconButton
-              danger
-              onClick={() => setDeleteDialogOpen(true)}
-              title="Delete workspace"
-              aria-label="Delete workspace"
-            >
-              <Trash size={16} />
-            </WorkshopIconButton>
+              {!metadata.owner && (
+                <WorkshopIconButton
+                  danger
+                  onClick={() => setDeleteDialogOpen(true)}
+                  title="Delete workspace"
+                  aria-label="Delete workspace"
+                >
+                  <Trash size={16} />
+                </WorkshopIconButton>
+              )}
+            </>
           )}
 
           {/* User menu */}
@@ -1586,7 +1597,7 @@ export default function GadgetEditor() {
                       onClick={() => setActivityView(tab.value)}
                     />
                   ))
-                  : rightTabs(selectedGadgetSummary?.output).map(tab => (
+                  : rightTabs(selectedGadgetSummary?.output, isManagedSystemOutput).map(tab => (
                     <PaneTab
                       key={tab.value}
                       active={activeTab === tab.value}
@@ -1679,7 +1690,7 @@ export default function GadgetEditor() {
               )}
             </div>
 
-            <div className={activeTab === 'code' ? 'h-full' : 'hidden'}>
+            {!isManagedSystemOutput && <div className={activeTab === 'code' ? 'h-full' : 'hidden'}>
               {overseer && selectedFilesRoot !== undefined ? (
                 <GadgetCodeInterface
                   overseer={overseer.stub}
@@ -1698,9 +1709,9 @@ export default function GadgetEditor() {
               ) : (
                 <NoGadgetPlaceholder height={RIGHT_CONTENT_H} />
               )}
-            </div>
+            </div>}
 
-            <div className={activeTab === 'connections' ? 'h-full overflow-auto' : 'hidden'}>
+            {!isManagedSystemOutput && <div className={activeTab === 'connections' ? 'h-full overflow-auto' : 'hidden'}>
               {overseer && selectedGadgetStub ? (
                 <Connections
                   key={selectedGadgetId}
@@ -1715,7 +1726,7 @@ export default function GadgetEditor() {
               ) : (
                 <NoGadgetPlaceholder height={RIGHT_CONTENT_H} />
               )}
-            </div>
+            </div>}
 
             </div>
           </div>
@@ -1732,6 +1743,7 @@ export default function GadgetEditor() {
             onExpandedChange={handleWorkpieceRailExpandedChange}
             onSelect={handleSelectWorkpiece}
             onRename={handleRenameWorkpiece}
+            renamable={!isManagedSystemOutput}
             pendingActivityCount={pendingActionsCount}
             onOpenActivity={() => openActivity(pendingActionsCount > 0 ? 'review' : 'history')}
           />
@@ -1756,7 +1768,7 @@ export default function GadgetEditor() {
       )}
 
       {/* Share modal */}
-      {overseer && metadata && (
+      {!isManagedSystemOutput && overseer && metadata && (
         <>
           <ShareModal
             open={shareModalOpen}
@@ -1778,14 +1790,16 @@ export default function GadgetEditor() {
         </>
       )}
 
-      <DeleteConfirmationDialog
-        open={deleteDialogOpen}
-        title="Delete workspace?"
-        description={<>This removes <span className="font-medium text-kumo-default">{metadata.title}</span>. You can&apos;t undo this.</>}
-        isDeleting={isDeleting}
-        onOpenChange={setDeleteDialogOpen}
-        onConfirm={handleDeleteConfirm}
-      />
+      {!isManagedSystemOutput && (
+        <DeleteConfirmationDialog
+          open={deleteDialogOpen}
+          title="Delete workspace?"
+          description={<>This removes <span className="font-medium text-kumo-default">{metadata.title}</span>. You can&apos;t undo this.</>}
+          isDeleting={isDeleting}
+          onOpenChange={setDeleteDialogOpen}
+          onConfirm={handleDeleteConfirm}
+        />
+      )}
 
     </div>
   )

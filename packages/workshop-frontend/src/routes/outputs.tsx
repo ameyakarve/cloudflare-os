@@ -56,7 +56,8 @@ function outputKey(output: OutputSummary): string {
 // GadgetClientImpl). The user's own workspaces carry no role; a shared one must say so, since a
 // role missing there predates role caching and may well be "use".
 function canModify(output: OutputSummary): boolean {
-  return output.owner === undefined || output.role === 'build'
+  return output.systemOutput === undefined &&
+    (output.owner === undefined || output.role === 'build')
 }
 
 // ─── rows / cards ────────────────────────────────────────────────────────────

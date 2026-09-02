@@ -134,10 +134,12 @@ function AppRow({
           }
         />
         <DropdownMenu.Content className={MENU_CONTENT}>
-          <DropdownMenu.Item onClick={startRenaming} className={MENU_ITEM}>
-            <Pencil size={13} className="mr-2" />
-            Rename
-          </DropdownMenu.Item>
+          {!gadget.systemOutput && (
+            <DropdownMenu.Item onClick={startRenaming} className={MENU_ITEM}>
+              <Pencil size={13} className="mr-2" />
+              Rename
+            </DropdownMenu.Item>
+          )}
           <DropdownMenu.Item onClick={() => onTogglePin(gadget)} className={MENU_ITEM}>
             <Star size={13} className="mr-2" weight={gadget.pinned ? 'fill' : 'regular'} />
             {gadget.pinned ? 'Unfavorite' : 'Favorite'}
@@ -146,19 +148,23 @@ function AppRow({
             <Info size={13} className="mr-2" />
             Information
           </DropdownMenu.Item>
-          <DropdownMenu.Item onClick={() => onShare(gadget)} className={MENU_ITEM}>
-            <ShareNetwork size={13} className="mr-2" />
-            Share
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator />
-          <DropdownMenu.Item
-            variant="danger"
-            onClick={() => onDelete(gadget)}
-            className={MENU_ITEM_DANGER}
-          >
-            <Trash size={13} className="mr-2" />
-            {gadget.owner ? 'Dismiss' : 'Delete'}
-          </DropdownMenu.Item>
+          {!gadget.systemOutput && (
+            <>
+              <DropdownMenu.Item onClick={() => onShare(gadget)} className={MENU_ITEM}>
+                <ShareNetwork size={13} className="mr-2" />
+                Share
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator />
+              <DropdownMenu.Item
+                variant="danger"
+                onClick={() => onDelete(gadget)}
+                className={MENU_ITEM_DANGER}
+              >
+                <Trash size={13} className="mr-2" />
+                {gadget.owner ? 'Dismiss' : 'Delete'}
+              </DropdownMenu.Item>
+            </>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu>
       </div>

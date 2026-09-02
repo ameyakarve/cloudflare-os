@@ -59,6 +59,8 @@ import {
 
 const logger = createWorkshopLogger("workshop.overseer");
 export const AGENT_RUNNING_ERROR_MESSAGE = "Agent is running, wait for it to finish.";
+export const MANAGED_SYSTEM_OUTPUT_ERROR_MESSAGE =
+    "This Ledger workspace is managed by the platform and cannot be modified.";
 
 let CODE_MODE_HARNESS =
 `import { WorkerEntrypoint, restore } from "cloudflare:workers";
@@ -1708,6 +1710,26 @@ class OverseerImpl implements AgentHooks {
     return record;
   }
 
+  /** The trusted deployment-owned output represented by this workspace, if any. */
+  managedSystemOutput(): "ledger" | undefined {
+    for (let gadget of this.storage.gadgets.list()) {
+      if (gadget.systemOutput) return gadget.systemOutput;
+    }
+    return undefined;
+  }
+
+  /** Reject workspace-level mutations of a deployment-managed singleton output. */
+  assertWorkspaceMutable(): void {
+    if (this.managedSystemOutput()) throw new Error(MANAGED_SYSTEM_OUTPUT_ERROR_MESSAGE);
+  }
+
+  /** Reject source, binding, metadata, or lifecycle mutations of a managed gadget. */
+  assertGadgetMutable(id: WorkpieceId): void {
+    if (this.getGadgetRecord(id).systemOutput) {
+      throw new Error(MANAGED_SYSTEM_OUTPUT_ERROR_MESSAGE);
+    }
+  }
+
   // Name of the Y.Doc root map holding the given gadget's files. The default gadget keeps the
   // legacy unnamed root ""; all others use the decimal workpiece ID.
   gadgetRootName(id: WorkpieceId): string {
@@ -1728,7 +1750,10 @@ class OverseerImpl implements AgentHooks {
   // to the right root) and, if `forChatId` is also given, must be visible to that chat -- a gadget
   // still provisional to some *other* chat is treated as nonexistent (its files exist only in its
   // own chat's proposed changes).
-  resolveWorkpieceRoot(workpieceId?: WorkpieceId, mustExist?: boolean, forChatId?: number)
+  // `forMutation` additionally rejects deployment-managed gadget source while still allowing the
+  // agent to inspect it with readFile.
+  resolveWorkpieceRoot(workpieceId?: WorkpieceId, mustExist?: boolean, forChatId?: number,
+                       forMutation?: boolean)
       : {workpieceId: WorkpieceId, rootName: string} {
     if (workpieceId === undefined && this.defaultGadgetId === undefined) {
       throw new Error(
@@ -1747,6 +1772,9 @@ class OverseerImpl implements AgentHooks {
       if (forChatId !== undefined && record.pending && record.pending.chatId !== forChatId) {
         throw new Error(`No such gadget: ${id}`);
       }
+      if (forMutation && record.systemOutput) {
+        throw new Error(MANAGED_SYSTEM_OUTPUT_ERROR_MESSAGE);
+      }
     }
     return {workpieceId: id, rootName: this.gadgetRootName(id)};
   }
@@ -1762,6 +1790,7 @@ class OverseerImpl implements AgentHooks {
   // if any.
   createGadget(title: string, bindingName: string, chatId?: number,
                output?: BlueprintOutput): GadgetRecord {
+    this.assertWorkspaceMutable();
     title = title.trim();
     if (!title) {
       throw new Error("A gadget requires a non-empty title.");
@@ -1934,6 +1963,7 @@ class OverseerImpl implements AgentHooks {
       throw new Error("The binding name `GADGET` is reserved.");
     }
     let gadget = this.getGadgetRecord(gadgetId);
+    this.assertGadgetMutable(gadgetId);
     let existing = gadget.bindings[name];
     if (existing) {
       // A pending edge is invisible to other chats for reads but still occupies its name for
@@ -1963,6 +1993,7 @@ class OverseerImpl implements AgentHooks {
   // some other chat is treated as nonexistent (it isn't this caller's to remove).
   unbindWorkpiece(gadgetId: WorkpieceId, name: string, forChatId?: number): void {
     let gadget = this.getGadgetRecord(gadgetId);
+    this.assertGadgetMutable(gadgetId);
     let edge = gadget.bindings[name];
     if (!edge || (edge.pending && edge.pending.chatId !== forChatId &&
                   forChatId !== undefined)) {
@@ -1976,6 +2007,7 @@ class OverseerImpl implements AgentHooks {
   // Rename a binding edge atomically, preserving edge metadata and restarting the gadget once.
   renameBinding(gadgetId: WorkpieceId, oldName: string, newName: string): void {
     let gadget = this.getGadgetRecord(gadgetId);
+    this.assertGadgetMutable(gadgetId);
     let edge = gadget.bindings[oldName];
     if (!edge) {
       throw new Error(`No such binding: ${oldName}`);
@@ -2001,7 +2033,7 @@ class OverseerImpl implements AgentHooks {
   // any content later resurrected into the root by an old client or merged branch is inert
   // because the registry entry -- the enumeration source of truth -- is gone.
   async removeGadget(id: WorkpieceId): Promise<void> {
-    this.getGadgetRecord(id);  // validate it exists
+    this.assertGadgetMutable(id);
 
     // Disable and delete hooks that wake this gadget.
     let def = this.defaultGadgetId;
@@ -2497,6 +2529,9 @@ class OverseerImpl implements AgentHooks {
   // thread. (The caller is presumed to have verified the chat exists and has proposed changes.)
   loadGadgetWorker(gadgetId: WorkpieceId, chatId?: number): WorkerStub {
     const gadget = this.getGadgetRecord(gadgetId);
+    // Deployment-managed outputs always execute their trusted mainline. Historical chat drafts
+    // from before the workspace was marked managed must never become a preview runtime.
+    if (gadget.systemOutput) chatId = undefined;
     let codeVersion = `${this.storage.codeVersion.get()}`;
     // The loader caches dynamic workers by name. Rev this trusted singleton independently so a
     // pre-completion Ledger server cannot survive the compatibility upgrade in that cache.
@@ -2562,7 +2597,8 @@ class OverseerImpl implements AgentHooks {
   // If `chatId` is specified, load the gadget including changes proposed in the given chat
   // thread.
   getGadgetFacetFetcher(gadgetId: WorkpieceId, chatId?: number): Fetcher<DurableObject> {
-    this.getGadgetRecord(gadgetId);  // validate it exists
+    let gadget = this.getGadgetRecord(gadgetId);
+    if (gadget.systemOutput) chatId = undefined;
 
     if (chatId !== undefined) {
       // Check if the requested chat has proposed changes. If not, then we don't want to load the
@@ -2670,6 +2706,8 @@ class OverseerImpl implements AgentHooks {
   }
 
   getGadgetUiBundle(gadgetId: WorkpieceId, chatId?: number): UiBundle | null {
+    let gadget = this.getGadgetRecord(gadgetId);
+    if (gadget.systemOutput) chatId = undefined;
     this.checkChatExistsAndMaterializeDrafts(chatId);
 
     let {ydoc} = this.buildYDoc("current");
@@ -2685,6 +2723,7 @@ class OverseerImpl implements AgentHooks {
 
   async getGadgetExportFormats(gadgetId: WorkpieceId, chatId?: number)
       : Promise<GadgetExportFormat[]> {
+    if (this.getGadgetRecord(gadgetId).systemOutput) chatId = undefined;
     this.checkChatExistsAndMaterializeDrafts(chatId);
     let resolved = await this.#resolveGadgetExportFormats(gadgetId, chatId);
     resolved.gadget?.[Symbol.dispose]();
@@ -2693,6 +2732,7 @@ class OverseerImpl implements AgentHooks {
 
   async exportGadget(gadgetId: WorkpieceId, formatId: string, chatId?: number)
       : Promise<ReadableStream<Uint8Array>> {
+    if (this.getGadgetRecord(gadgetId).systemOutput) chatId = undefined;
     this.checkChatExistsAndMaterializeDrafts(chatId);
     let {formats, handler, gadget} = await this.#resolveGadgetExportFormats(gadgetId, chatId);
     if (!gadget) throw new Error("The Gadget server stub is unavailable.");
@@ -7606,6 +7646,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       sharingProhibited: this.impl.storage.prohibitAllSharing.get(),
       role: "build",
       defaultGadgetId: this.impl.defaultGadgetId,
+      systemOutput: this.impl.managedSystemOutput(),
     };
     if (!this.isOwner) {
       result.owner = await this.#owner.whoami();
@@ -7625,6 +7666,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
       sharingProhibited: this.impl.storage.prohibitAllSharing.get(),
       role: "build",
       defaultGadgetId: this.impl.defaultGadgetId,
+      systemOutput: this.impl.managedSystemOutput(),
     };
 
     // For collaborators, include owner info.
@@ -7678,6 +7720,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async setTitle(title: string): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     this.impl.storage.title.put(title);
     await this.#owner.updateTitle(this.impl.ctx.id.toString(), title);
   }
@@ -7692,6 +7735,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   async createGadget(title: string, chatId?: number, bindingName?: string)
       : Promise<RpcStub<GadgetClient>> {
+    this.impl.assertWorkspaceMutable();
     // When creating within a chat, names already claimed in that chat's scope (its frozen seed
     // plus log-derived bindings) are off-limits too: the chat's binding map is keyed by name,
     // so on replay the existing binding would win and the new gadget would never be addressable
@@ -7758,6 +7802,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     if (!this.isOwner) {
       throw new Error("Only the workspace owner can delete it.");
     }
+    this.impl.assertWorkspaceMutable();
     let startedAt = Date.now();
 
     this.impl.recordGadgetAnalytics({
@@ -7833,6 +7878,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async updateCode(update: Uint8Array, chatId?: number): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     if (chatId === undefined) {
       this.impl.updateCode(update);
       return;
@@ -7898,6 +7944,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   async newGatekeeper(accountId: number, resourceUrl: string)
       : Promise<GatekeeperClient<any> | null> {
+    this.impl.assertWorkspaceMutable();
     let {class: cls, vendorId, typeUrlPattern} =
         await this.#clientUser.getGatekeeperClassFor(accountId, resourceUrl);
     let creationSpec: GatekeeperCreationSpec = {
@@ -7912,6 +7959,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async newAiModelGatekeeper(modelId: string): Promise<GatekeeperClient<any>> {
+    this.impl.assertWorkspaceMutable();
     let chatMeta = await this.#clientUser.getChatContext(modelId);
     let props: LanguageModelGatekeeperProps = {
       displayName: chatMeta.aiModel!.profile.name,
@@ -7938,6 +7986,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async newAgentSpawnerGatekeeper(config: AgentSpawnerConfig): Promise<GatekeeperClient<any>> {
+    this.impl.assertWorkspaceMutable();
     // Validate the configured env: names must be valid binding names and targets must exist --
     // and must not be gadgets still provisional to some chat, which belong to that chat's
     // unaccepted proposal, not (yet) to the workspace. (Spawn-time snapshotting tolerates targets
@@ -8044,6 +8093,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async enableHook(id: number): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     let record = this.impl.storage.boundHooks.get(id);
     if (!record) throw new Error("Invalid hook ID.");
 
@@ -8078,6 +8128,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async disableHook(id: number): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     let record = this.impl.storage.boundHooks.get(id);
     if (!record) throw new Error("Invalid hook ID.");
 
@@ -8096,6 +8147,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async deleteHook(id: number): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     return this.impl.deleteHook(id);
   }
 
@@ -8177,6 +8229,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   // actions that this newly unblocks. Auto-approval rules are workspace-wide per gatekeeper.
   async setAutoApprovedActionKind(gatekeeperId: WorkpieceId, actionKind: ActionKind)
       : Promise<void> {
+    this.impl.assertWorkspaceMutable();
     let gatekeeper = this.impl.storage.gatekeepers.get(gatekeeperId);
     if (!gatekeeper) {
       throw new Error(`No such gatekeeper: ${gatekeeperId}`);
@@ -8195,6 +8248,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   // Remove the auto-approval rule for `tag` on the given gatekeeper, so future matching actions
   // require manual approval again.
   async removeAutoApprovedActionKind(gatekeeperId: WorkpieceId, tag: string): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     this.impl.storage.autoApproveTags.delete(`${gatekeeperId}:${tag}`);
   }
 
@@ -8657,6 +8711,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   async mergeChanges(chatId: number, mergeThrough: number | null,
                      options?: { includeDraft?: boolean }): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     let userMeta = await this.#clientUser.getChatContext(null);
 
     let meta = this.impl.assertChatNotActive(chatId);
@@ -9270,6 +9325,7 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
       owner: await this.#owner.whoami(),
       role: "use",
       defaultGadgetId: this.impl.defaultGadgetId,
+      systemOutput: this.impl.managedSystemOutput(),
     };
   }
 
@@ -9284,6 +9340,7 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
       owner: await this.#owner.whoami(),
       role: "use",
       defaultGadgetId: this.impl.defaultGadgetId,
+      systemOutput: this.impl.managedSystemOutput(),
     };
 
     let titleSubscriber = {
@@ -9481,12 +9538,14 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
   }
 
   async setTitle(title: string): Promise<void> {
+    this.impl.assertGadgetMutable(this.id);
     let record = this.impl.getGadgetRecord(this.id);
     record.title = title;
     this.impl.storage.gadgets.put(record);
   }
 
   async remove(): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     return this.impl.removeGadget(this.id);
   }
 
@@ -9608,6 +9667,7 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
 
   async setBlueprintAnnotation(name: string, annotation: BlueprintBindingAnnotation)
       : Promise<void> {
+    this.impl.assertGadgetMutable(this.id);
     let {record, edge} = this.#getBindingEdge(name);
     let gatekeeper = this.impl.storage.gatekeepers.get(edge.target);
     edge.blueprintAnnotation = {
@@ -9622,6 +9682,7 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
   async createBlueprint(title?: string, description?: string,
                         screenshotUpload?: BlueprintScreenshotUpload)
       : Promise<BlueprintGadgetSummary> {
+    this.impl.assertGadgetMutable(this.id);
     if (!this.impl.ownerId) throw new Error("Workspace not initialized.");
 
     // NOTE: It is INTENTIONAL that collaborators can publish blueprints on behalf of the owner.
@@ -9794,6 +9855,7 @@ class GatekeeperClientImpl<Session extends RpcCompatible<Session>>
   }
 
   async remove(): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     let record = this.impl.storage.gatekeepers.get(this.id);
     this.impl.removeGatekeeper(this.id);
     this.impl.recordGadgetAnalytics({
@@ -9819,6 +9881,7 @@ class GatekeeperClientImpl<Session extends RpcCompatible<Session>>
   }
 
   async setTitle(title: string): Promise<void> {
+    this.impl.assertWorkspaceMutable();
     // This changes only the display title used locally within this workspace (resourceTitle is a
     // denormalized copy of the remote resource's title), never the remote resource.
     let record = this.#getRecord();

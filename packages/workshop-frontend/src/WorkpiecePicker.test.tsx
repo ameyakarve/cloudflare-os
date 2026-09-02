@@ -13,7 +13,7 @@ describe('WorkpiecePicker', () => {
 
   afterEach(() => act(() => root?.unmount()))
 
-  async function render(expanded: boolean) {
+  async function render(expanded: boolean, renamable = true) {
     const container = document.createElement('div')
     root = createRoot(container)
     await act(async () => root!.render(
@@ -28,6 +28,7 @@ describe('WorkpiecePicker', () => {
         onExpandedChange={vi.fn<(expanded: boolean) => void>()}
         onSelect={vi.fn<(id: number) => void>()}
         onRename={vi.fn<(id: number, title: string) => void>()}
+        renamable={renamable}
         pendingActivityCount={0}
         onOpenActivity={vi.fn<() => void>()}
       />,
@@ -51,5 +52,12 @@ describe('WorkpiecePicker', () => {
 
     expect(container.textContent).not.toContain('Hooked')
     expect(container.querySelectorAll(HOOK_BADGE)).toHaveLength(1)
+  })
+
+  it('does not expose gadget renaming for a managed workspace', async () => {
+    const container = await render(true, false)
+
+    expect(container.querySelector('[aria-label="Rename Hooked"]')).toBeNull()
+    expect(container.querySelector('[aria-label="Rename Ordinary"]')).toBeNull()
   })
 })

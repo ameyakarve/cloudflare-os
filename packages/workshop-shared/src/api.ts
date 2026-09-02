@@ -1265,6 +1265,13 @@ export type GadgetMetadata = {
    */
   defaultGadgetId?: WorkpieceId;
 
+  /**
+   * Trusted marker for a deployment-managed singleton output. Managed workspaces can be used and
+   * their domain data can be changed through approved capabilities, but their workspace title,
+   * gadget source, bindings, and lifecycle are controlled by the deployment.
+   */
+  systemOutput?: "ledger";
+
   // TODO:
   // - created / modified / activity times
   // - icon? thumbnail?
@@ -1379,6 +1386,8 @@ export type OutputSummary = {
 
   title: string;
   workspaceTitle: string;
+  /** Trusted marker for an output owned and maintained by the deployment. */
+  systemOutput?: "ledger";
   created: Date;
 
   /**

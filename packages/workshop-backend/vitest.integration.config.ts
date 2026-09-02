@@ -41,6 +41,9 @@ export default defineConfig({
       if (error.message?.includes("abortAllDurableObjects")) return false;
       // Same, for the test that aborts only the user DO (state.abort with this reason).
       if (error.message?.includes("user-DO reset injected by test")) return false;
+      // Expected rejected native capabilities in the managed-workspace authorization test.
+      if (error.message ===
+          "This Ledger workspace is managed by the platform and cannot be modified.") return false;
     },
   },
 });

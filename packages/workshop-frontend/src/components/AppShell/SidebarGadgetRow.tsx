@@ -104,12 +104,14 @@ export default function SidebarGadgetRow({
                 }
               />
               <DropdownMenu.Content className={MENU_CONTENT} style={MENU_POSITIONER_STYLE}>
-                <DropdownMenu.Item
-                  onClick={startRename}
-                  className={MENU_ITEM}
-                >
-                  <Pencil size={13} className="mr-2" /> Rename
-                </DropdownMenu.Item>
+                {!gadget.systemOutput && (
+                  <DropdownMenu.Item
+                    onClick={startRename}
+                    className={MENU_ITEM}
+                  >
+                    <Pencil size={13} className="mr-2" /> Rename
+                  </DropdownMenu.Item>
+                )}
                 <DropdownMenu.Item
                   onClick={() => onTogglePin(gadget)}
                   className={MENU_ITEM}
@@ -117,21 +119,25 @@ export default function SidebarGadgetRow({
                   <Star size={13} className="mr-2" weight={gadget.pinned ? 'fill' : 'regular'} />
                   {gadget.pinned ? 'Unfavorite' : 'Favorite'}
                 </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  onClick={() => onShare(gadget)}
-                  className={MENU_ITEM}
-                >
-                  <ShareNetwork size={13} className="mr-2" /> Share
-                </DropdownMenu.Item>
-                <DropdownMenu.Separator />
-                <DropdownMenu.Item
-                  variant="danger"
-                  onClick={() => onDelete(gadget)}
-                  className={MENU_ITEM_DANGER}
-                >
-                  <Trash size={13} className="mr-2" />
-                  {gadget.owner ? 'Dismiss' : 'Delete'}
-                </DropdownMenu.Item>
+                {!gadget.systemOutput && (
+                  <>
+                    <DropdownMenu.Item
+                      onClick={() => onShare(gadget)}
+                      className={MENU_ITEM}
+                    >
+                      <ShareNetwork size={13} className="mr-2" /> Share
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item
+                      variant="danger"
+                      onClick={() => onDelete(gadget)}
+                      className={MENU_ITEM_DANGER}
+                    >
+                      <Trash size={13} className="mr-2" />
+                      {gadget.owner ? 'Dismiss' : 'Delete'}
+                    </DropdownMenu.Item>
+                  </>
+                )}
               </DropdownMenu.Content>
             </DropdownMenu>
           </div>

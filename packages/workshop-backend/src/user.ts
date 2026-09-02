@@ -743,13 +743,26 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     let result: GadgetMetadataWithTimestamps[] = [];
     for (let gadget of this.storage.gadgets.list()) {
       if (isFullyCreated(gadget)) {
-        result.push(gadget);
+        let systemOutput = this.systemOutputForWorkspace(gadget.id);
+        result.push({...gadget, ...(systemOutput ? {systemOutput} : {})});
       }
     }
     return result;
   }
 
+  /** Resolve the trusted singleton index back to presentation metadata. */
+  systemOutputForWorkspace(id: string): "ledger" | undefined {
+    return this.storage.systemOutputs.get().ledger === id ? "ledger" : undefined;
+  }
+
+  assertWorkspaceMutable(id: string): void {
+    if (this.systemOutputForWorkspace(id)) {
+      throw new Error("This Ledger workspace is managed by the platform and cannot be modified.");
+    }
+  }
+
   async updateTitle(gadgetId: string, title: string) {
+    this.assertWorkspaceMutable(gadgetId);
     let record = this.storage.gadgets.get(gadgetId);
     if (!record) {
       throw new Error("No such workspace belonging to user.");
@@ -768,7 +781,10 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async getGadget(id: string): Promise<GadgetMetadata | null> {
-    return this.storage.gadgets.get(id) || null;
+    let gadget = this.storage.gadgets.get(id);
+    if (!gadget) return null;
+    let systemOutput = this.systemOutputForWorkspace(id);
+    return {...gadget, ...(systemOutput ? {systemOutput} : {})};
   }
 
   async newGadget(id: string, title: string): Promise<void> {
@@ -815,16 +831,9 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async deleteGadget(id: string): Promise<void> {
+    this.assertWorkspaceMutable(id);
     this.storage.gadgets.delete(id);
     this.storage.outputs.byWorkspace.delete(id);
-    let outputs = this.storage.systemOutputs.get();
-    let changed = false;
-    for (let [key, workspaceId] of Object.entries(outputs)) {
-      if (workspaceId !== id) continue;
-      delete outputs[key];
-      changed = true;
-    }
-    if (changed) this.storage.systemOutputs.put(outputs);
   }
 
   /**
@@ -912,12 +921,14 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     for (let output of this.storage.outputs.list()) {
       let workspace = this.storage.gadgets.get(output.workspaceId);
       if (!workspace || !isFullyCreated(workspace)) continue;
+      let systemOutput = this.systemOutputForWorkspace(output.workspaceId);
       result.push({
         workspaceId: output.workspaceId,
         workpieceId: output.workpieceId,
         ...(output.output ? {output: output.output} : {}),
         title: output.title,
         workspaceTitle: workspace.title,
+        ...(systemOutput ? {systemOutput} : {}),
         created: output.created,
         lastActive: workspace.lastActive,
         ...(workspace.owner ? {owner: workspace.owner} : {}),
