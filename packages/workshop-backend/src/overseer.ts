@@ -2496,7 +2496,11 @@ class OverseerImpl implements AgentHooks {
   // If `chatId` is specified, load the worker including changes proposed in the given chat
   // thread. (The caller is presumed to have verified the chat exists and has proposed changes.)
   loadGadgetWorker(gadgetId: WorkpieceId, chatId?: number): WorkerStub {
+    const gadget = this.getGadgetRecord(gadgetId);
     let codeVersion = `${this.storage.codeVersion.get()}`;
+    // The loader caches dynamic workers by name. Rev this trusted singleton independently so a
+    // pre-completion Ledger server cannot survive the compatibility upgrade in that cache.
+    if (gadget.systemOutput === "ledger") codeVersion += ".ledger-completion-1";
     let sequence: number | undefined;
     if (chatId !== undefined) {
       sequence = this.storage.nextChatSequences.get(chatId)?.nextSequence || 0;
@@ -2521,7 +2525,6 @@ class OverseerImpl implements AgentHooks {
         }
       }
 
-      const gadget = this.getGadgetRecord(gadgetId);
       if (gadget.systemOutput === "ledger" && modules["server.js"]) {
         modules["server.js"] = upgradeLegacyLedgerServer(modules["server.js"]);
       }
