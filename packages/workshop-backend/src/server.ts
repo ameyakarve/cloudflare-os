@@ -19,7 +19,7 @@ import { getAiGatewayConfig } from "./ai-gateway.js";
 import { AdminSettings, AdminApiImpl } from "./admin-settings.js";
 import { BlueprintKvRecord, buildBlueprintArchiveStream, sanitizeBlueprintOutput, listFeaturedBlueprintsFromKv, parseBlueprintArchive, randomBlueprintId, readBlueprintContent, readBlueprintKvRecord } from "./blueprint-archive.js";
 import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
-import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback, MilesVaultLedgerBinding } from "./overseer";
+import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback, LedgerEditorGatekeeper } from "./overseer";
 import { ExternalMessageGateway } from "./external-message-gateway";
 import { RpcStub as NativeRpcStub } from "cloudflare:workers";
 import { recordAnalytics } from "./analytics";
@@ -56,7 +56,7 @@ export { UserDurableObject, GatekeeperConnectCallbackImpl };
 // Re-export entrypoint types from overseer.ts.
 export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
     CodeModeTailLoopback, AgentSpawnerGatekeeper, GadgetTailLoopback,
-    AgentSelfLoopback, TransientStubLoopback, MilesVaultLedgerBinding };
+    AgentSelfLoopback, TransientStubLoopback, LedgerEditorGatekeeper };
 
 // Re-export service-binding entrypoint for external channel integrations.
 export { ExternalMessageGateway };
@@ -279,6 +279,13 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   async openGadget(id: string, shareKey?: string,
                    configureObservers?: RpcStub<ObserverConfigCallback>)
       : Promise<RpcStub<Overseer>> {
+    // Direct links can open My Ledger without visiting Outputs first. Repair its deployment-owned
+    // first-class binding at this authenticated boundary before any gadget code can run.
+    if (await this.#user.getSystemOutputWorkspace("ledger") === id) {
+      await this.overseers.get(this.overseers.idFromString(id))
+          .configureMilesVaultLedgerOutput(
+              this.#userId.toString(), await this.#ledgerIdentityKey());
+    }
     // @ts-expect-error Cap'n Web RPC stubs and native RPC stubs are compatible but the type
     //     system doesn't know this.
     return this.#openGadgetInternal(id, shareKey, configureObservers);
@@ -317,9 +324,8 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       if (!ledgerId) throw new Error("MilesVault Ledger output was not created.");
     }
 
-    // The canonical Ledger workspace owns a deployment capability, not a user-selected binding.
-    // Stamp both its authority marker and exact upstream Durable Object key before it can open.
-    // This also repairs Ledger workspaces created by an older deployment.
+    // Install the canonical Ledger's first-class binding before it can open. This also repairs
+    // Ledger workspaces created by an older deployment.
     let ledgerIdentityKey = await this.#ledgerIdentityKey();
     await this.overseers.get(this.overseers.idFromString(ledgerId))
         .configureMilesVaultLedgerOutput(this.#userId.toString(), ledgerIdentityKey);

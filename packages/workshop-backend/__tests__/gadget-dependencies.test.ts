@@ -92,7 +92,7 @@ function App() { return h(Text, { size: "sm" }, "All accounts"); }
       .toBe("const { BeancountEditor } = GadgetUI;");
   });
 
-  it("adds completion to a saved Ledger server without changing other gadget servers", () => {
+  it("moves a saved Ledger server to the first-class binding without changing other servers", () => {
     const oldLedger = `
 import { DurableObject } from "cloudflare:workers";
 export class Gadget extends DurableObject {
@@ -106,7 +106,10 @@ export class Gadget extends DurableObject {
 }`;
     const upgraded = upgradeLegacyLedgerServer(oldLedger);
     expect(upgraded).toContain("async completionData() {");
-    expect(upgraded).toContain("return this.env.MILESVAULT_LEDGER.completionData();");
+    expect(upgraded).toContain("return this.env.LEDGER.listEntries();");
+    expect(upgraded).toContain("return this.env.LEDGER.completionData();");
+    expect(upgraded).toContain("return this.env.LEDGER.replaceBuffer({ knownIds, buffer });");
+    expect(upgraded).not.toContain("MILESVAULT_LEDGER");
     expect(upgradeLegacyLedgerServer(upgraded)).toBe(upgraded);
 
     const userServer = `export class Gadget {

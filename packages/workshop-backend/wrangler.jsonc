@@ -56,6 +56,11 @@
       // login back to the waiting browser.
       "tag": "v2",
       "new_sqlite_classes": [ "PendingLogin" ]
+    },
+    {
+      // Private first-class resource bound to the deployment-managed My Ledger output.
+      "tag": "v3",
+      "new_sqlite_classes": [ "LedgerEditorGatekeeper" ]
     }
   ],
 

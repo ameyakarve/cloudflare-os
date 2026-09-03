@@ -74,7 +74,7 @@ function accountOptions(
   for (const account of ledger) push(account, 2);
   for (const account of data.catalogueAccounts) push(account, 1, "catalogue");
   for (const root of accountRoots) push(root, 0);
-  return { from: typedFrom, options, validFor: /^[A-Za-z0-9:\-]*$/ };
+  return { from: typedFrom, options, validFor: /^[A-Za-z0-9:-]*$/ };
 }
 
 /** Exact completion behavior used by the production MilesVault journal editor. */
@@ -89,7 +89,7 @@ export function createBeancountCompletionSource(
     const before = ctx.state.sliceDoc(line.from, ctx.pos);
 
     if (node.name === "Account") return accountOptions(ctx, node.from, data);
-    const accountStart = before.match(/(?:^\s+|(?:open|close|note|balance|pad)\s+)([A-Za-z][A-Za-z0-9:\-]*)?$/);
+    const accountStart = before.match(/(?:^\s+|(?:open|close|note|balance|pad)\s+)([A-Za-z][A-Za-z0-9:-]*)?$/);
     if (accountStart) {
       const typed = accountStart[1] ?? "";
       if (ctx.explicit || typed.length > 0) return accountOptions(ctx, ctx.pos - typed.length, data);
@@ -110,12 +110,12 @@ export function createBeancountCompletionSource(
 
     if (node.name === "Currency" || /\s-?[\d,.]+\s+[A-Z]*$/.test(before)) {
       const { currencies } = harvest(ctx);
-      const typed = before.match(/[A-Z][A-Z0-9\-]*$/)?.[0] ?? "";
+      const typed = before.match(/[A-Z][A-Z0-9-]*$/)?.[0] ?? "";
       if (currencies.size === 0) return null;
       return {
         from: ctx.pos - typed.length,
         options: [...currencies].map(label => ({ label, type: "constant" })),
-        validFor: /^[A-Z0-9\-]*$/,
+        validFor: /^[A-Z0-9-]*$/,
       };
     }
 

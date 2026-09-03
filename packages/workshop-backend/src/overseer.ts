@@ -180,81 +180,102 @@ interface RestoreForgerEntrypoint extends WorkerEntrypoint {
   forge(params: unknown): Promise<unknown>;
 }
 
-type MilesVaultLedgerEntryKind =
+type LedgerEntryKind =
     "txn" | "open" | "close" | "commodity" | "balance" | "price" | "note" | "document" | "event";
 
-type MilesVaultLedgerEntry = {
-  kind: MilesVaultLedgerEntryKind;
+type LedgerEntry = {
+  kind: LedgerEntryKind;
   id: number;
   raw_text: string;
   updated_at: number;
 };
 
-type MilesVaultLedgerEntryRef = {
-  kind: MilesVaultLedgerEntryKind;
+type LedgerEntryRef = {
+  kind: LedgerEntryKind;
   id: number;
   expected_updated_at: number;
 };
 
-type MilesVaultLedgerDo = {
-  listEntries(): Promise<{rows: MilesVaultLedgerEntry[]}>;
-  replaceBuffer(input: {knownIds: MilesVaultLedgerEntryRef[], buffer: string}): Promise<unknown>;
+type LedgerBackend = {
+  listEntries(): Promise<{rows: LedgerEntry[]}>;
+  replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown>;
   ledger_snapshot(): Promise<{
     accounts: Array<{account: string, close_date: number | null}>;
   }>;
 };
 
-type MilesVaultEditorSupport = {
+type LedgerEditorSupport = {
   accountSuggestions(): Promise<{accounts: string[]}>;
 };
 
-type MilesVaultLedgerNamespace = {
+type LedgerBackendNamespace = {
   idFromName(name: string): DurableObjectId;
-  get(id: DurableObjectId): MilesVaultLedgerDo;
+  get(id: DurableObjectId): LedgerBackend;
 };
 
-type MilesVaultLedgerBindingProps = {ledgerKey: string};
+type LedgerEditorGatekeeperProps = {ledgerKey: string};
+const LEDGER_RESOURCE_URL = "https://milesvault.com/ledger";
+const LEDGER_RESOURCE_TITLE = "My Ledger";
 
-const MILESVAULT_LEDGER_ENTRY_KINDS = new Set<MilesVaultLedgerEntryKind>([
+type LedgerEditorSessionApi = {
+  listEntries(): Promise<{rows: LedgerEntry[]}>;
+  completionData(): Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}>;
+  replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown>;
+};
+
+const LEDGER_ENTRY_KINDS = new Set<LedgerEntryKind>([
   "txn", "open", "close", "commodity", "balance", "price", "note", "document", "event",
 ]);
 
-/** First-party data plane used only by the bundled MilesVault Ledger output. */
 @validateRpc()
-export class MilesVaultLedgerBinding
-    extends WorkerEntrypoint<Cloudflare.Env, MilesVaultLedgerBindingProps> {
-  async #ledger(): Promise<MilesVaultLedgerDo> {
-    let namespace = (this.env as unknown as {MILESVAULT_LEDGER: MilesVaultLedgerNamespace})
-        .MILESVAULT_LEDGER;
-    if (!namespace) throw new Error("MilesVault ledger service is unavailable.");
-    return namespace.get(namespace.idFromName(this.ctx.props.ledgerKey));
+class LedgerEditorSession extends RpcTarget implements LedgerEditorSessionApi {
+  #approvalQueue: NativeRpcStub<ApprovalQueue>;
+  #ledger: LedgerBackend;
+  #support?: LedgerEditorSupport;
+
+  constructor(approvalQueue: NativeRpcStub<ApprovalQueue>, ledger: LedgerBackend,
+              support?: LedgerEditorSupport) {
+    super();
+    this.#approvalQueue = approvalQueue;
+    this.#ledger = ledger;
+    this.#support = support;
   }
 
   /** Load the canonical journal rows for the owning MilesVault user. */
-  async listEntries(): Promise<{rows: MilesVaultLedgerEntry[]}> {
-    return (await this.#ledger()).listEntries();
+  async listEntries(): Promise<{rows: LedgerEntry[]}> {
+    let result = await this.#ledger.listEntries();
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read my Ledger",
+      description: `Read ${result.rows.length} journal entries from my MilesVault Ledger.`,
+    });
+    return result;
   }
 
   /** Hydrate the same ledger-first, graph-catalogue-second account completion used in production. */
   async completionData(): Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}> {
-    let support = (this.env as unknown as {MILESVAULT_EDITOR_SUPPORT: MilesVaultEditorSupport})
-        .MILESVAULT_EDITOR_SUPPORT;
     let [snapshot, catalogue] = await Promise.all([
-      (await this.#ledger()).ledger_snapshot(),
-      support?.accountSuggestions().catch(() => ({accounts: []})) ?? Promise.resolve({accounts: []}),
+      this.#ledger.ledger_snapshot(),
+      this.#support?.accountSuggestions().catch(() => ({accounts: []})) ??
+          Promise.resolve({accounts: []}),
     ]);
     let clean = (values: string[]) => [...new Set(values.filter(value =>
       typeof value === "string" && value.length > 0 && value.length <= 512))].slice(0, 10_000);
-    return {
+    let result = {
       ledgerAccounts: clean(snapshot.accounts
           .filter(account => account.close_date === null)
           .map(account => account.account)),
       catalogueAccounts: clean(catalogue.accounts),
     };
+    await this.#approvalQueue.authorizeObservation({
+      title: "Read Ledger account suggestions",
+      description: `Read ${result.ledgerAccounts.length} open Ledger accounts and ` +
+          `${result.catalogueAccounts.length} catalogue accounts for editor completion.`,
+    });
+    return result;
   }
 
   /** Run MilesVault's existing OCC-checked, atomic journal replacement. */
-  async replaceBuffer(input: {knownIds: MilesVaultLedgerEntryRef[], buffer: string}): Promise<unknown> {
+  async replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown> {
     if (!input || !Array.isArray(input.knownIds) || typeof input.buffer !== "string") {
       throw new TypeError("replaceBuffer requires knownIds and a Beancount buffer.");
     }
@@ -262,13 +283,106 @@ export class MilesVaultLedgerBinding
       throw new TypeError("Ledger update is too large.");
     }
     for (let [index, ref] of input.knownIds.entries()) {
-      if (!ref || !MILESVAULT_LEDGER_ENTRY_KINDS.has(ref.kind) ||
+      if (!ref || !LEDGER_ENTRY_KINDS.has(ref.kind) ||
           !Number.isSafeInteger(ref.id) || ref.id <= 0 ||
           !Number.isSafeInteger(ref.expected_updated_at)) {
         throw new TypeError(`Invalid knownIds[${index}].`);
       }
     }
-    return (await this.#ledger()).replaceBuffer(input);
+    // This binding is installed only on the private, immutable My Ledger system output. Save is
+    // an explicit human editor gesture there, so it deliberately preserves the existing immediate
+    // save contract rather than turning that click into a second approval-screen interaction.
+    return this.#ledger.replaceBuffer(input);
+  }
+
+  [Symbol.dispose](): void {
+    this.#approvalQueue[Symbol.dispose]();
+  }
+}
+
+const LEDGER_EDITOR_TYPES = `
+type LedgerEntryKind =
+  | "txn" | "open" | "close" | "commodity" | "balance"
+  | "price" | "note" | "document" | "event";
+
+interface LedgerEntry {
+  kind: LedgerEntryKind;
+  id: number;
+  raw_text: string;
+  updated_at: number;
+}
+
+interface LedgerEntryRef {
+  kind: LedgerEntryKind;
+  id: number;
+  expected_updated_at: number;
+}
+
+interface LedgerEditorSession {
+  listEntries(): Promise<{ rows: LedgerEntry[] }>;
+  completionData(): Promise<{
+    ledgerAccounts: string[];
+    catalogueAccounts: string[];
+  }>;
+  replaceBuffer(input: {
+    knownIds: LedgerEntryRef[];
+    buffer: string;
+  }): Promise<unknown>;
+}
+`;
+
+/** First-class Ledger editor resource installed only on the managed My Ledger output. */
+export class LedgerEditorGatekeeper
+    extends DurableObject<Cloudflare.Env, LedgerEditorGatekeeperProps>
+    implements Gatekeeper<LedgerEditorSessionApi> {
+  async describe(): Promise<ResourceDescription> {
+    return {
+      url: LEDGER_RESOURCE_URL,
+      title: LEDGER_RESOURCE_TITLE,
+      snippet: "Read and edit your canonical MilesVault journal.",
+      suggestedBindingName: "LEDGER",
+      tsType: "LedgerEditorSession",
+    };
+  }
+
+  async getTypeScriptTypes(): Promise<string> {
+    return LEDGER_EDITOR_TYPES;
+  }
+
+  async getAutoApprovableActions(): Promise<[]> {
+    return [];
+  }
+
+  async startSession(approvalQueue: NativeRpcStub<ApprovalQueue>)
+      : Promise<LedgerEditorSessionApi> {
+    let env = this.env as unknown as {
+      MILESVAULT_LEDGER: LedgerBackendNamespace,
+      MILESVAULT_EDITOR_SUPPORT?: LedgerEditorSupport,
+    };
+    if (!env.MILESVAULT_LEDGER) throw new Error("MilesVault Ledger service is unavailable.");
+    let ledger = env.MILESVAULT_LEDGER.get(
+        env.MILESVAULT_LEDGER.idFromName(this.ctx.props.ledgerKey));
+    return new LedgerEditorSession(approvalQueue.dup(), ledger, env.MILESVAULT_EDITOR_SUPPORT);
+  }
+
+  applyAction(_action: number): Promise<void> {
+    throw new Error("This Ledger binding does not queue actions.");
+  }
+
+  rejectAction(_action: number): Promise<void> {
+    throw new Error("This Ledger binding does not queue actions.");
+  }
+
+  revertAction(_action: number): Promise<void> {
+    throw new Error("This Ledger binding does not queue actions.");
+  }
+
+  async addObserver(_id: string, _user: Fetcher): Promise<void> {
+    throw new Error("My Ledger cannot be shared.");
+  }
+
+  async removeObserver(_id: string): Promise<void> {
+    // My Ledger cannot be shared, so there is no observer state to remove.
   }
 }
 
@@ -366,6 +480,11 @@ type GatekeeperRecord = {
   hasSlashCommands?: true;  // denormalized from ResourceDescription
   class: GatekeeperClass,
   hook?: string,  // export name to which the gatekeeper's hook is connected
+
+  // Trusted resources installed by the deployment rather than connected by a user. The marker
+  // lets their owning system output repair the binding idempotently without trusting a title or
+  // URL supplied by some unrelated Gatekeeper.
+  systemResource?: {type: "ledger", identityKey: string},
 
   // Records how this gatekeeper was originally created, enabling blueprint metadata derivation.
   creationSpec?: GatekeeperCreationSpec;
@@ -870,10 +989,6 @@ function makeOverseerStorage(storage: DurableObjectStorage) {
       // Initialized on first startup.
       ownerId: <string | undefined>undefined,
 
-      // Exact upstream key for the deployment-owned MilesVault Ledger output. Presence is an
-      // authority marker: only AuthenticatedApi can stamp it on the owner's canonical workspace.
-      milesVaultLedgerKey: <string | undefined>undefined,
-
       // Version of this DO's storage schema, gating lazy migrations. Used to trigger migrations
       // at construction time.
       //   0 = Workspace from before multi-gadget mode was introduced (unless `ownerId` is absent,
@@ -1216,10 +1331,6 @@ class OverseerImpl implements AgentHooks {
   // If not set, this gadget doesn't exist yet.
   ownerId?: string;
 
-  // Cached deployment-owned Ledger capability key. Unlike the descriptive output metadata, this
-  // is trusted state and is never sourced from a Blueprint or Gadget.
-  milesVaultLedgerKey?: string;
-
   // Cached from storage, initialized during the constructor, since it is referenced often but
   // almost never changes.
   defaultGadgetId?: WorkpieceId;
@@ -1517,7 +1628,6 @@ class OverseerImpl implements AgentHooks {
     this.storage = makeOverseerStorage(ctx.storage);
     this.users = this.ctx.exports.UserDurableObject;
     this.ownerId = this.storage.ownerId.get();
-    this.milesVaultLedgerKey = this.storage.milesVaultLedgerKey.get();
 
     // Run any pending storage migration before anything else can touch storage. This must happen
     // in the constructor (not just open()) because the DO also wakes via constructor-driven
@@ -2341,17 +2451,6 @@ class OverseerImpl implements AgentHooks {
     let env: Record<string, any> = {}
     let gadget = this.getGadgetRecord(gadgetId);
     env.GADGET = this.makeBindingLoopback({type: "gadget", id: gadgetId}, caller);
-    // This is a deployment-owned capability for the bundled Ledger output, not a general Gadget
-    // binding. The agent does not receive it; other gadgets continue to use the read-only Ledger
-    // Gatekeeper when they need current holdings.
-    if (gadget.systemOutput === "ledger" && this.milesVaultLedgerKey) {
-      let exports = this.ctx.exports as unknown as {
-        MilesVaultLedgerBinding(options: {props: MilesVaultLedgerBindingProps}): MilesVaultLedgerDo,
-      };
-      env.MILESVAULT_LEDGER = exports.MilesVaultLedgerBinding({
-        props: {ledgerKey: this.milesVaultLedgerKey},
-      });
-    }
     for (let [name, edge] of this.visibleBindings(gadget, forChatId)) {
       env[name] = this.makeBindingLoopback({type: "gatekeeper", id: edge.target}, caller);
     }
@@ -2582,8 +2681,8 @@ class OverseerImpl implements AgentHooks {
     if (gadget.systemOutput) chatId = undefined;
     let codeVersion = `${this.storage.codeVersion.get()}`;
     // The loader caches dynamic workers by name. Rev this trusted singleton independently so a
-    // pre-completion Ledger server cannot survive the compatibility upgrade in that cache.
-    if (gadget.systemOutput === "ledger") codeVersion += ".ledger-completion-1";
+    // Ledger server using the old implicit API cannot survive the compatibility upgrade in cache.
+    if (gadget.systemOutput === "ledger") codeVersion += ".ledger-binding-1";
     let sequence: number | undefined;
     if (chatId !== undefined) {
       sequence = this.storage.nextChatSequences.get(chatId)?.nextSequence || 0;
@@ -6801,11 +6900,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return this.impl.outputsSnapshot();
   }
 
-  /**
-   * Stamp or repair the trusted capability on the owner's canonical Ledger workspace. The caller
-   * obtains both values from the authenticated server boundary; Gadget metadata alone can never
-   * grant this capability.
-   */
+  /** Install or repair the first-class LEDGER binding on the owner's canonical Ledger output. */
   async configureMilesVaultLedgerOutput(ownerId: string, ledgerKey: string): Promise<void> {
     if (this.impl.ownerId !== ownerId) throw new Error("MilesVault Ledger output owner mismatch.");
     if (!ledgerKey || ledgerKey.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(ledgerKey)) {
@@ -6817,13 +6912,51 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       throw new Error("Canonical MilesVault Ledger gadget is missing or ambiguous.");
     }
     let gadget = ledgerGadgets[0];
+    let gadgetChanged = false;
     if (gadget.systemOutput !== "ledger") {
       gadget.systemOutput = "ledger";
-      this.impl.storage.gadgets.put(gadget);
+      gadgetChanged = true;
     }
-    if (this.impl.milesVaultLedgerKey !== ledgerKey) {
-      this.impl.milesVaultLedgerKey = ledgerKey;
-      this.impl.storage.milesVaultLedgerKey.put(ledgerKey);
+
+    let makeClass = (): GatekeeperClass =>
+      this.impl.ctx.exports.LedgerEditorGatekeeper({props: {ledgerKey}});
+
+    let edge = gadget.bindings.LEDGER;
+    let record = edge && this.impl.storage.gatekeepers.get(edge.target);
+    if (record && record.systemResource?.type !== "ledger") {
+      throw new Error("Canonical MilesVault Ledger gadget has a conflicting LEDGER binding.");
+    }
+
+    if (!record) {
+      let id = this.impl.allocateWorkpieceId();
+      record = {
+        id,
+        class: makeClass(),
+        resourceTitle: LEDGER_RESOURCE_TITLE,
+        resourceUrl: LEDGER_RESOURCE_URL,
+        systemResource: {type: "ledger", identityKey: ledgerKey},
+      };
+      this.impl.storage.gatekeepers.put(record);
+      gadget.bindings.LEDGER = {target: id};
+      gadgetChanged = true;
+    } else {
+      let systemResource = record.systemResource;
+      if (!systemResource || systemResource.type !== "ledger") {
+        throw new Error("Canonical MilesVault Ledger binding lost its trusted resource marker.");
+      }
+      if (systemResource.identityKey !== ledgerKey) {
+        // The Facet class carries its identity in props. Replace the stateless Facet when the
+        // authenticated MilesVault identity changes, while keeping the same visible binding edge.
+        this.impl.ctx.facets.delete(`gatekeeper${record.id}`);
+        record.class = makeClass();
+        systemResource.identityKey = ledgerKey;
+        this.impl.storage.gatekeepers.put(record);
+      }
+    }
+
+    if (gadgetChanged) {
+      this.impl.storage.gadgets.put(gadget);
+      this.impl.bumpVersion([gadget.id]);
     }
     if (!this.impl.storage.prohibitAllSharing.get()) {
       this.impl.storage.prohibitAllSharing.put(true);

@@ -242,6 +242,9 @@ describe("deployment-managed Ledger workspace", () => {
       {id: "ledger", noun: "Ledger", plural: "Ledgers", icon: "notebook"},
       "ledger",
     );
+    const ledgerIdentity = `${account.username}@example.com`;
+    await overseerDo.configureMilesVaultLedgerOutput(userId, ledgerIdentity);
+    await overseerDo.configureMilesVaultLedgerOutput(userId, ledgerIdentity);
 
     const metadata = await workspace.getMetadata();
     expect(metadata.systemOutput).toBe("ledger");
@@ -256,6 +259,17 @@ describe("deployment-managed Ledger workspace", () => {
     expect((await rejection(user.deleteGadget(workspaceIdString))).message).toBe(expected);
 
     using gadget = await workspace.getGadget(metadata.defaultGadgetId!);
+    expect(await gadget.listBindings()).toEqual([expect.objectContaining({
+      name: "LEDGER",
+      resourceTitle: "My Ledger",
+    })]);
+    using ledgerBinding = await gadget.getBinding("LEDGER");
+    expect(await ledgerBinding?.describe()).toMatchObject({
+      url: "https://milesvault.com/ledger",
+      title: "My Ledger",
+      suggestedBindingName: "LEDGER",
+      tsType: "LedgerEditorSession",
+    });
     expect((await rejection(gadget.setTitle("Renamed"))).message).toBe(expected);
     expect((await rejection(gadget.bind("TEST", 999))).message).toBe(expected);
     expect((await rejection(gadget.createBlueprint())).message).toBe(expected);

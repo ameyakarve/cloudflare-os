@@ -49,23 +49,29 @@ export function upgradeLegacyGadgetClient(
   return clientCode;
 }
 
-const LEGACY_LEDGER_REPLACE_METHOD = `  async replaceBuffer(knownIds, buffer) {
-    return this.env.MILESVAULT_LEDGER.replaceBuffer({ knownIds, buffer });
+const LEDGER_REPLACE_METHOD = `  async replaceBuffer(knownIds, buffer) {
+    return this.env.LEDGER.replaceBuffer({ knownIds, buffer });
   }`;
 
-/** Adds the completion RPC to saved deployment-owned Ledger servers created before it existed. */
+/** Migrates saved deployment-owned Ledger servers onto their explicit first-class binding. */
 export function upgradeLegacyLedgerServer(serverCode: string): string {
-  if (serverCode.includes("async completionData()") ||
-      !serverCode.includes("return this.env.MILESVAULT_LEDGER.listEntries();") ||
-      !serverCode.includes(LEGACY_LEDGER_REPLACE_METHOD)) return serverCode;
+  let hasLedgerList = serverCode.includes("return this.env.MILESVAULT_LEDGER.listEntries();") ||
+      serverCode.includes("return this.env.LEDGER.listEntries();");
+  let hasLedgerReplace = serverCode.includes(
+      "return this.env.MILESVAULT_LEDGER.replaceBuffer({ knownIds, buffer });") ||
+      serverCode.includes("return this.env.LEDGER.replaceBuffer({ knownIds, buffer });");
+  if (!hasLedgerList || !hasLedgerReplace) return serverCode;
 
-  return serverCode.replace(
-    LEGACY_LEDGER_REPLACE_METHOD,
+  let upgraded = serverCode.replaceAll("this.env.MILESVAULT_LEDGER", "this.env.LEDGER");
+  if (upgraded.includes("async completionData()")) return upgraded;
+
+  return upgraded.replace(
+    LEDGER_REPLACE_METHOD,
     `  async completionData() {
-    return this.env.MILESVAULT_LEDGER.completionData();
+    return this.env.LEDGER.completionData();
   }
 
-${LEGACY_LEDGER_REPLACE_METHOD}`,
+${LEDGER_REPLACE_METHOD}`,
   );
 }
 
