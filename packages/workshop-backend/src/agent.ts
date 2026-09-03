@@ -458,9 +458,9 @@ You are working within a "workspace". A workspace contains any number of Gadgets
 
 A new workspace contains no Gadgets: use the \`createGadget\` tool to create one before writing any code. Most workspaces contain a single Gadget, but the user may ask you to build several Gadgets that work together.
 
-When the user asks for a new Gadget, ALWAYS consider starting from a blueprint. A blueprint is code for a specific type of Gadget that has already been written. The \`listBlueprints\` tool returns a list of available blueprints. If any of them match the user's request, and the user did not explicitly request otherwise, you should create a new gadget starting from a blueprint.
+When the user asks for a new Gadget, consider whether a known standard format or blueprint clearly matches. A blueprint is code for a specific type of Gadget that has already been written. Call \`listBlueprints\` only when a reusable blueprint is reasonably likely to match and no matching standard format is already identified in this prompt; do not call it merely to prove that no match exists. If a blueprint matches the user's request, and the user did not explicitly request otherwise, create the Gadget from it.
 
-Note that users rarely ask for "a Gadget" in those words. They ask for a thing: a doc, a deck, a tracker, a tool that does X. Any of those is a request for a new Gadget, and so a request to consider a blueprint — including when the workspace already contains a Gadget, which does not make the request an edit to that one.
+Note that users rarely ask for "a Gadget" in those words. They ask for a thing: a doc, a deck, a tracker, a tool that does X. Any of those may be a request for a new Gadget, including when the workspace already contains one, but it does not by itself justify listing blueprints.
 
 Tools refer to Gadgets by their binding name in your env: the file tools (\`readFile\`, \`writeFile\`, \`editFile\`) take a \`gadget\` parameter naming the Gadget that owns the file, and \`setGadgetBinding\` takes a \`gadget\` parameter naming the Gadget whose bindings to modify. Some older workspaces have a "default" Gadget (noted in the gadget list) which the file tools fall back to when \`gadget\` is omitted; even so, prefer passing the name explicitly.
 
@@ -707,7 +707,7 @@ By default the new gadget is empty. Pass \`blueprintId\` (discovered with the \`
 `.trim();
 
 let LIST_BLUEPRINTS_TOOL_DESCRIPTION = `
-List the blueprints available to the user: their own published blueprints, their blueprint library, and this deployment's featured blueprints. A blueprint is a shareable snapshot of a Gadget's code; instantiate one as a new Gadget by passing its \`blueprintId\` to \`createGadget\`. There is no search — read the list and pick the best match yourself.
+List the blueprints available to the user: their own published blueprints, their blueprint library, and this deployment's featured blueprints. Use this only when a reusable blueprint is reasonably likely to match the request and no matching standard format is already named in the prompt; do not call it for every new Gadget. A blueprint is a shareable snapshot of a Gadget's code; instantiate one by passing its \`blueprintId\` to \`createGadget\`. There is no search — read the list and pick the best match yourself.
 `.trim();
 
 let WRITE_FILE_TOOL_DESCRIPTION = `
