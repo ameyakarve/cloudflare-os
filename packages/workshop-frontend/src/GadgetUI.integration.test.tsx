@@ -202,6 +202,22 @@ describe('GadgetUI RPC recovery', () => {
     expect(postMessage).toHaveBeenCalledWith({ type: 'gadget-theme', mode: 'dark' }, '*')
   })
 
+  it('notifies the mounted gadget when external data may have changed', async () => {
+    const gadget = fakeGadget('ledger', 'document.body.textContent = "ledger"')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" dataReloadTrigger={1} />)
+    })
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    const iframe = container.querySelector('iframe')!
+    const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage')
+
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" dataReloadTrigger={2} />)
+    })
+
+    expect(postMessage).toHaveBeenCalledWith({ type: 'gadget-data-invalidated' }, '*')
+  })
+
   it('keeps the iframe while redirecting calls to the replacement gadget client', async () => {
     const first = fakeGadget('first', 'document.body.textContent = "first"')
     await act(async () => {

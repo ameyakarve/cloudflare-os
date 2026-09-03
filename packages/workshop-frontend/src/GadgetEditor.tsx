@@ -754,6 +754,13 @@ export default function GadgetEditor() {
     return pending
   }, [actionsById])
   const pendingActionsCount = pendingActions.length
+  const approvedActionCount = useMemo(() => {
+    let count = 0
+    for (const record of actionsById.values()) {
+      if (record.type === 'action' && record.state === 'approved') count++
+    }
+    return count
+  }, [actionsById])
 
   // Whether the *selected* gadget has code. When no gadget is selected, the code interface is
   // unmounted and raw `hasCode` can't update, but a gadget-less workspace has no code to show.
@@ -1721,6 +1728,7 @@ export default function GadgetEditor() {
                   gadget={selectedGadgetStub}
                   height={isGadgetFullscreen ? '100%' : RIGHT_CONTENT_H}
                   reloadTrigger={uiReloadTrigger}
+                  dataReloadTrigger={approvedActionCount}
                   isVisible={activeTab === 'app' && !previewMode}
                   chatId={previewChatId}
                   onConsoleLog={handleClientConsoleLog}
@@ -1814,6 +1822,7 @@ export default function GadgetEditor() {
               gadget={selectedGadgetStub}
               height="100%"
               reloadTrigger={uiReloadTrigger}
+              dataReloadTrigger={approvedActionCount}
               isVisible={true}
               chatId={previewChatId}
               onConsoleLog={handleClientConsoleLog}

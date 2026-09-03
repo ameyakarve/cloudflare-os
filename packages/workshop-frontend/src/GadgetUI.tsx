@@ -132,6 +132,8 @@ interface GadgetUIProps {
   gadget: RpcStub<GadgetClient>
   height: string
   reloadTrigger?: number
+  /** Bumped when an approved external action may have changed data read by the gadget. */
+  dataReloadTrigger?: number
   isVisible?: boolean
   chatId?: number
   onConsoleLog?: (log: ConsoleLogEvent) => void
@@ -150,7 +152,7 @@ export default function GadgetUI(props: GadgetUIProps) {
   return <GadgetUISession key={props.chatId} {...props} resolvedThemeMode={resolvedThemeMode} />
 }
 
-function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chatId, onConsoleLog, onIframeEscape, resolvedThemeMode }: GadgetUIProps & { resolvedThemeMode: ResolvedThemeMode }) {
+function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isVisible = true, chatId, onConsoleLog, onIframeEscape, resolvedThemeMode }: GadgetUIProps & { resolvedThemeMode: ResolvedThemeMode }) {
   const [sandboxedHtml, setSandboxedHtml] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -161,6 +163,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
   const resolvedThemeModeRef = useRef(resolvedThemeMode)
   resolvedThemeModeRef.current = resolvedThemeMode
   const prevReloadTriggerRef = useRef(reloadTrigger)
+  const prevDataReloadTriggerRef = useRef(dataReloadTrigger)
   // Identifies the newest bundle load, so an older one can't write state after being superseded.
   const loadGenerationRef = useRef(0)
   // Bumped by the retry button to ask for a fresh load.
@@ -345,6 +348,14 @@ function GadgetUISession({ gadget, height, reloadTrigger, isVisible = true, chat
       mode: resolvedThemeMode,
     }, '*')
   }, [resolvedThemeMode, sandboxedHtml, iframeGeneration])
+
+  useEffect(() => {
+    if (dataReloadTrigger === undefined || dataReloadTrigger === prevDataReloadTriggerRef.current) return
+    prevDataReloadTriggerRef.current = dataReloadTrigger
+    iframeRef.current?.contentWindow?.postMessage({
+      type: 'gadget-data-invalidated',
+    }, '*')
+  }, [dataReloadTrigger])
 
   // Effect to handle iframe RPC handshake
   useEffect(() => {
