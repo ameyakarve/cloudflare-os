@@ -49,30 +49,22 @@ export function upgradeLegacyGadgetClient(
   return clientCode;
 }
 
-const LEDGER_REPLACE_METHOD = `  async replaceBuffer(knownIds, buffer) {
-    return this.env.LEDGER.replaceBuffer({ knownIds, buffer });
-  }`;
+const MANAGED_LEDGER_SERVER = `import { DurableObject } from "cloudflare:workers";
 
-/** Migrates saved deployment-owned Ledger servers onto their explicit first-class binding. */
-export function upgradeLegacyLedgerServer(serverCode: string): string {
-  let hasLedgerList = serverCode.includes("return this.env.MILESVAULT_LEDGER.listEntries();") ||
-      serverCode.includes("return this.env.LEDGER.listEntries();");
-  let hasLedgerReplace = serverCode.includes(
-      "return this.env.MILESVAULT_LEDGER.replaceBuffer({ knownIds, buffer });") ||
-      serverCode.includes("return this.env.LEDGER.replaceBuffer({ knownIds, buffer });");
-  if (!hasLedgerList || !hasLedgerReplace) return serverCode;
-
-  let upgraded = serverCode.replaceAll("this.env.MILESVAULT_LEDGER", "this.env.LEDGER");
-  if (upgraded.includes("async completionData()")) return upgraded;
-
-  return upgraded.replace(
-    LEDGER_REPLACE_METHOD,
-    `  async completionData() {
-    return this.env.LEDGER.completionData();
+export class Gadget extends DurableObject {
+  ledgerUiOnly() {
+    throw new Error("My Ledger data is available to agents only through the approval-gated LEDGER resource.");
   }
+}`;
 
-${LEDGER_REPLACE_METHOD}`,
-  );
+/**
+ * Managed Ledger clients receive a platform-owned browser-only session. Keep the dynamic Gadget
+ * itself inert so an agent cannot use `env.GADGET` as a confused deputy for the UI's direct Save
+ * capability, regardless of which historical server snapshot the singleton stored.
+ */
+export function upgradeLegacyLedgerServer(serverCode: string): string {
+  void serverCode;
+  return MANAGED_LEDGER_SERVER;
 }
 
 /** Prefixes a Gadget client with the real Cloudflare Kumo React library and standalone CSS. */

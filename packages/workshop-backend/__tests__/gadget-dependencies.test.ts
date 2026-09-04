@@ -92,7 +92,7 @@ function App() { return h(Text, { size: "sm" }, "All accounts"); }
       .toBe("const { BeancountEditor } = GadgetUI;");
   });
 
-  it("moves a saved Ledger server to the first-class binding without changing other servers", () => {
+  it("makes every saved managed Ledger server inert to agent RPC", () => {
     const oldLedger = `
 import { DurableObject } from "cloudflare:workers";
 export class Gadget extends DurableObject {
@@ -105,10 +105,10 @@ export class Gadget extends DurableObject {
   }
 }`;
     const upgraded = upgradeLegacyLedgerServer(oldLedger);
-    expect(upgraded).toContain("async completionData() {");
-    expect(upgraded).toContain("return this.env.LEDGER.listEntries();");
-    expect(upgraded).toContain("return this.env.LEDGER.completionData();");
-    expect(upgraded).toContain("return this.env.LEDGER.replaceBuffer({ knownIds, buffer });");
+    expect(upgraded).toContain("ledgerUiOnly()");
+    expect(upgraded).toContain("approval-gated LEDGER resource");
+    expect(upgraded).not.toContain("listEntries()");
+    expect(upgraded).not.toContain("replaceBuffer(");
     expect(upgraded).not.toContain("MILESVAULT_LEDGER");
     expect(upgradeLegacyLedgerServer(upgraded)).toBe(upgraded);
 
@@ -117,6 +117,6 @@ export class Gadget extends DurableObject {
         return this.env.USER_LEDGER.replaceBuffer({ knownIds, buffer });
       }
     }`;
-    expect(upgradeLegacyLedgerServer(userServer)).toBe(userServer);
+    expect(upgradeLegacyLedgerServer(userServer)).toBe(upgraded);
   });
 });

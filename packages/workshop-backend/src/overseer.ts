@@ -50,6 +50,11 @@ import { renderGadgetInBrowser } from "./browser-export";
 import { assertGadgetBindingsAvailable } from "./gadget-dependencies";
 import { upgradeLegacyLedgerServer, withGadgetKumo } from "./gadget-kumo";
 import {
+  allowActionInPrivateLedgerWorkspace,
+  exposeGatekeeperToAgent,
+  exposeManagedGadgetBindingsToAgent,
+} from "./managed-output-boundary";
+import {
   defaultExportFormats,
   exportServerFormat,
   GADGET_EXPORT_ENTRYPOINT,
@@ -253,19 +258,7 @@ class LedgerEditorSession extends RpcTarget implements LedgerEditorSessionApi {
 
   /** Hydrate the same ledger-first, graph-catalogue-second account completion used in production. */
   async completionData(): Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}> {
-    let [snapshot, catalogue] = await Promise.all([
-      this.#ledger.ledger_snapshot(),
-      this.#support?.accountSuggestions().catch(() => ({accounts: []})) ??
-          Promise.resolve({accounts: []}),
-    ]);
-    let clean = (values: string[]) => [...new Set(values.filter(value =>
-      typeof value === "string" && value.length > 0 && value.length <= 512))].slice(0, 10_000);
-    let result = {
-      ledgerAccounts: clean(snapshot.accounts
-          .filter(account => account.close_date === null)
-          .map(account => account.account)),
-      catalogueAccounts: clean(catalogue.accounts),
-    };
+    let result = await loadLedgerCompletionData(this.#ledger, this.#support);
     await this.#approvalQueue.authorizeObservation({
       title: "Read Ledger account suggestions",
       description: `Read ${result.ledgerAccounts.length} open Ledger accounts and ` +
@@ -276,19 +269,7 @@ class LedgerEditorSession extends RpcTarget implements LedgerEditorSessionApi {
 
   /** Run MilesVault's existing OCC-checked, atomic journal replacement. */
   async replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown> {
-    if (!input || !Array.isArray(input.knownIds) || typeof input.buffer !== "string") {
-      throw new TypeError("replaceBuffer requires knownIds and a Beancount buffer.");
-    }
-    if (input.buffer.length > 5_000_000 || input.knownIds.length > 100_000) {
-      throw new TypeError("Ledger update is too large.");
-    }
-    for (let [index, ref] of input.knownIds.entries()) {
-      if (!ref || !LEDGER_ENTRY_KINDS.has(ref.kind) ||
-          !Number.isSafeInteger(ref.id) || ref.id <= 0 ||
-          !Number.isSafeInteger(ref.expected_updated_at)) {
-        throw new TypeError(`Invalid knownIds[${index}].`);
-      }
-    }
+    validateLedgerReplaceInput(input);
     // This binding is installed only on the private, immutable My Ledger system output. Save is
     // an explicit human editor gesture there, so it deliberately preserves the existing immediate
     // save contract rather than turning that click into a second approval-screen interaction.
@@ -297,6 +278,66 @@ class LedgerEditorSession extends RpcTarget implements LedgerEditorSessionApi {
 
   [Symbol.dispose](): void {
     this.#approvalQueue[Symbol.dispose]();
+  }
+}
+
+function validateLedgerReplaceInput(
+    input: {knownIds: LedgerEntryRef[], buffer: string}): void {
+  if (!input || !Array.isArray(input.knownIds) || typeof input.buffer !== "string") {
+    throw new TypeError("replaceBuffer requires knownIds and a Beancount buffer.");
+  }
+  if (input.buffer.length > 5_000_000 || input.knownIds.length > 100_000) {
+    throw new TypeError("Ledger update is too large.");
+  }
+  for (let [index, ref] of input.knownIds.entries()) {
+    if (!ref || !LEDGER_ENTRY_KINDS.has(ref.kind) ||
+        !Number.isSafeInteger(ref.id) || ref.id <= 0 ||
+        !Number.isSafeInteger(ref.expected_updated_at)) {
+      throw new TypeError(`Invalid knownIds[${index}].`);
+    }
+  }
+}
+
+async function loadLedgerCompletionData(
+    ledger: LedgerBackend, support?: LedgerEditorSupport)
+    : Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}> {
+  let [snapshot, catalogue] = await Promise.all([
+    ledger.ledger_snapshot(),
+    support?.accountSuggestions().catch(() => ({accounts: []})) ??
+        Promise.resolve({accounts: []}),
+  ]);
+  let clean = (values: string[]) => [...new Set(values.filter(value =>
+    typeof value === "string" && value.length > 0 && value.length <= 512))].slice(0, 10_000);
+  return {
+    ledgerAccounts: clean(snapshot.accounts
+        .filter(account => account.close_date === null)
+        .map(account => account.account)),
+    catalogueAccounts: clean(catalogue.accounts),
+  };
+}
+
+/**
+ * Capability handed only to the authenticated browser rendering the managed Ledger output.
+ * It deliberately is not a Gadget method or a binding in the agent's executeCode environment:
+ * a human Save gesture keeps the existing immediate editor contract, while an AI write has only
+ * the approval-gated ambient Ledger Gatekeeper available.
+ */
+class LedgerEditorUiSession extends RpcTarget implements LedgerEditorSessionApi {
+  constructor(private ledger: LedgerBackend, private support?: LedgerEditorSupport) {
+    super();
+  }
+
+  listEntries(): Promise<{rows: LedgerEntry[]}> {
+    return this.ledger.listEntries();
+  }
+
+  completionData(): Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}> {
+    return loadLedgerCompletionData(this.ledger, this.support);
+  }
+
+  replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown> {
+    validateLedgerReplaceInput(input);
+    return this.ledger.replaceBuffer(input);
   }
 }
 
@@ -2483,6 +2524,10 @@ class OverseerImpl implements AgentHooks {
         case "workpiece": {
           if (this.storage.gadgets.get(entry.id)) {
             env[name] = this.makeBindingLoopback({type: "gadget", id: entry.id}, caller);
+          } else if (!exposeGatekeeperToAgent(this.storage.gatekeepers.get(entry.id))) {
+            // Deployment-private bindings power managed browser UIs. They are never agent
+            // capabilities, including in chats whose frozen binding map predates this rule.
+            continue;
           } else if (this.storage.gatekeepers.get(entry.id)) {
             env[name] = this.makeBindingLoopback({type: "gatekeeper", id: entry.id}, caller);
           }
@@ -2682,7 +2727,7 @@ class OverseerImpl implements AgentHooks {
     let codeVersion = `${this.storage.codeVersion.get()}`;
     // The loader caches dynamic workers by name. Rev this trusted singleton independently so a
     // Ledger server using the old implicit API cannot survive the compatibility upgrade in cache.
-    if (gadget.systemOutput === "ledger") codeVersion += ".ledger-binding-1";
+    if (gadget.systemOutput === "ledger") codeVersion += ".ledger-ui-session-2";
     let sequence: number | undefined;
     if (chatId !== undefined) {
       sequence = this.storage.nextChatSequences.get(chatId)?.nextSequence || 0;
@@ -2850,6 +2895,31 @@ class OverseerImpl implements AgentHooks {
     // correctly.
     // @ts-expect-error NativeRpcStub still has infinite recursion problems, fixed in Cap'n Web.
     return new NativeRpcStub(proxy) as RpcStub<any>;
+  }
+
+  /**
+   * Return the capability used by a browser rendering a Gadget. Ordinary Gadgets receive their
+   * Durable Object as before. The managed Ledger receives a platform-owned UI session instead,
+   * so its explicit human Save path never has to be exposed as an agent-callable Gadget method.
+   */
+  async getGadgetUiSession(gadgetId: WorkpieceId, chatId?: number): Promise<RpcStub<any>> {
+    let gadget = this.getGadgetRecord(gadgetId);
+    if (gadget.systemOutput !== "ledger") return this.getGadgetFacet(gadgetId, chatId);
+
+    let edge = gadget.bindings.LEDGER;
+    let gatekeeper = edge && this.storage.gatekeepers.get(edge.target);
+    if (!gatekeeper?.systemResource || gatekeeper.systemResource.type !== "ledger") {
+      throw new Error("Canonical MilesVault Ledger UI binding is unavailable.");
+    }
+    let env = this.env as unknown as {
+      MILESVAULT_LEDGER: LedgerBackendNamespace,
+      MILESVAULT_EDITOR_SUPPORT?: LedgerEditorSupport,
+    };
+    if (!env.MILESVAULT_LEDGER) throw new Error("MilesVault Ledger service is unavailable.");
+    let ledger = env.MILESVAULT_LEDGER.get(
+        env.MILESVAULT_LEDGER.idFromName(gatekeeper.systemResource.identityKey));
+    return new NativeRpcStub(
+        new LedgerEditorUiSession(ledger, env.MILESVAULT_EDITOR_SUPPORT)) as unknown as RpcStub<any>;
   }
 
   getGadgetUiBundle(gadgetId: WorkpieceId, chatId?: number): UiBundle | null {
@@ -3371,7 +3441,9 @@ class OverseerImpl implements AgentHooks {
   async submitAction(gatekeeperId: number, action: number,
                      description: ActionDescription, caller: GatekeeperCaller)
       : Promise<void> {
-    if (this.storage.prohibitAllSharing.get()) {
+    let gatekeeper = this.storage.gatekeepers.get(gatekeeperId);
+    if (this.storage.prohibitAllSharing.get() &&
+        !allowActionInPrivateLedgerWorkspace(gatekeeper)) {
       throw new Error(
           "This workspace has observed sensitive data. To prevent leaks, the workspace is prohibited " +
           "from performing actions.");
@@ -3379,8 +3451,6 @@ class OverseerImpl implements AgentHooks {
 
     let actionId = this.storage.nextActionId.get();
     this.storage.nextActionId.put(actionId + 1);
-
-    let gatekeeper = this.storage.gatekeepers.get(gatekeeperId);
 
     let record: ActionRecord = {
       id: actionId,
@@ -4819,6 +4889,7 @@ class OverseerImpl implements AgentHooks {
       rootName: this.gadgetRootName(gadget.id),
       isDefault: gadget.id === this.defaultGadgetId,
       output: gadget.output,
+      systemOutput: gadget.systemOutput,
       bindings: this.visibleBindings(gadget, forChatId).map(([name, edge]) => ({
         name,
         title: this.storage.gatekeepers.get(edge.target)?.resourceTitle || "(title unavailable)",
@@ -4918,6 +4989,10 @@ class OverseerImpl implements AgentHooks {
       if (!(gadget.bindingName in result)) result[gadget.bindingName] = gadget.id;
     }
     for (let gadget of gadgets) {
+      // Managed-output bindings are implementation capabilities for their browser UI, not
+      // workspace resources. Their agent-facing counterpart is the ambient Gatekeeper (for the
+      // Ledger, that is the approval-gated `propose_journal_edit` surface).
+      if (!exposeManagedGadgetBindingsToAgent(gadget)) continue;
       for (let [name, edge] of this.visibleBindings(gadget)) {
         if (!(name in result)) result[name] = edge.target;
       }
@@ -5124,6 +5199,45 @@ class OverseerImpl implements AgentHooks {
     }
     let seedMap = context.bindings;
 
+    // Capability-boundary migration for Ledger chats created before the approval-gated ambient
+    // resource existed. Remove the old browser-UI implementation binding, then fold the ambient
+    // Ledger into this already-frozen chat as a one-time replacement. Without this, the unsafe
+    // binding would correctly disappear but the same conversation would have no write path until
+    // the user opened a new chat.
+    let hasManagedLedger = [...this.storage.gadgets.list()]
+        .some(gadget => gadget.systemOutput === "ledger");
+    if (hasManagedLedger) {
+      for (let [name, target] of Object.entries(seedMap)) {
+        let gatekeeper = this.storage.gatekeepers.get(target);
+        if (gatekeeper && !exposeGatekeeperToAgent(gatekeeper)) {
+          delete seedMap[name];
+          dirty = true;
+        }
+      }
+      let ledgerAmbientIds = [...this.storage.gatekeepers.list()]
+          .filter(gk => allowActionInPrivateLedgerWorkspace(gk))
+          .map(gk => gk.id)
+          .toSorted((a, b) => a - b);
+      for (let id of ledgerAmbientIds) {
+        if (!ambientIds.includes(id)) {
+          ambientIds.push(id);
+          ambientIds.sort((a, b) => a - b);
+          dirty = true;
+        }
+        if (Object.values(seedMap).includes(id)) continue;
+        let suggested: string | undefined;
+        try {
+          suggested = (await this.getGatekeeperFacet(id).describe()).suggestedBindingName;
+        } catch (err) {
+          this.logger.warn("failed to name migrated Ledger resource", {
+            event: "chat.binding.ledger.migrate.failed", gatekeeperId: id, error: err,
+          });
+        }
+        seedMap[fallbackBindingName(suggested || "LEDGER", name => name in seedMap)] = id;
+        dirty = true;
+      }
+    }
+
     // --- The naming chokepoint: stamp binding names onto persisted messages that lack them. ---
     // First collect every name already in the chat's scope (and a target -> name map for reuse)
     // from the seed plus the log -- including the callback PARAMS_<n> names the replay loop will
@@ -5321,6 +5435,9 @@ class OverseerImpl implements AgentHooks {
       }
       let gk = this.storage.gatekeepers.get(target);
       if (!gk) continue;
+      // Old chats may have frozen this deployment-private edge before managed bindings were
+      // removed from the default agent environment. Do not rematerialize it into their prompt.
+      if (!exposeGatekeeperToAgent(gk)) continue;
       let info: SeedBindingInfo =
           {name, target, title: gk.resourceTitle || "(untitled resource)", isGadget: false};
       if (ambientSet.has(target)) info.catalog = catalogs.get(target) ?? null;
@@ -9743,7 +9860,7 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
       chat_id: chatId,
       interaction_type: "gadget_ui_connected",
     });
-    return this.impl.getGadgetFacet(this.id, chatId);
+    return this.impl.getGadgetUiSession(this.id, chatId);
   }
 
   async getExportFormats(chatId?: number): Promise<GadgetExportFormat[]> {

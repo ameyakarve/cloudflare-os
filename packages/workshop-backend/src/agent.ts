@@ -184,6 +184,8 @@ export type AgentGadgetInfo = {
   bindings: {name: string, title: string, target: WorkpieceId}[];
   /** What instantiating this gadget's blueprint produces, when it came from one that declares it. */
   output?: BlueprintOutput;
+  /** Deployment-managed outputs may reserve their Gadget RPC surface for the browser UI. */
+  systemOutput?: "ledger";
 };
 
 // Resolves a `describeBinding` tool argument (a name in the chat's env) to its human-readable
@@ -2311,7 +2313,14 @@ export async function runAgent(
               `As of the start of this session, this gadget contained the following files:`,
               ...files.map(f => `* ${f}`));
         }
-        if (info.output) {
+        if (info.systemOutput === "ledger") {
+          lines.push(
+              `This is the managed Ledger UI. Its Gadget RPC surface` +
+              (envName !== undefined ? ` (\`env.${envName}\`)` : ``) + ` is ` +
+              `intentionally not a ledger data API. Read or change ledger data only through the ` +
+              `ambient MilesVault Ledger resource listed below; its write method automatically ` +
+              `creates the user's approval request.`);
+        } else if (info.output) {
           // When people are using common platform formats/outputs, most times people just want to use
           // them, not to edit them. Especially non-technical folks. We tell the agent to wait to be
           // explicitly asked.
@@ -2324,7 +2333,9 @@ export async function runAgent(
               `edit its code to change its content. Edit the code only if the user asks to change ` +
               `how the ${info.output.noun} itself works (its editor, layout, or features).`);
         }
-        if (info.bindings.length == 0) {
+        if (info.systemOutput === "ledger") {
+          lines.push(`Its implementation bindings are private to the browser UI and are not in your env.`);
+        } else if (info.bindings.length == 0) {
           lines.push(
               `This gadget has no bindings. This is authoritative: every external ` +
               `\`this.env.<NAME>\` reference in server.js is missing until setGadgetBinding ` +
