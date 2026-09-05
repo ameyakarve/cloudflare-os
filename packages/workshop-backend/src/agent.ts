@@ -2318,8 +2318,11 @@ export async function runAgent(
               `This is the managed Ledger UI. Its Gadget RPC surface` +
               (envName !== undefined ? ` (\`env.${envName}\`)` : ``) + ` is ` +
               `intentionally not a ledger data API. Read or change ledger data only through the ` +
-              `ambient MilesVault Ledger resource listed below; its write method automatically ` +
-              `creates the user's approval request.`);
+              `ambient MilesVault Ledger resource listed below. For any natural-language ledger ` +
+              `change, call its \`propose_edit\` method: the existing MilesVault Resolver and ` +
+              `Formatter prepare the entry and the method automatically creates the user's ` +
+              `approval request. Do not author Beancount or call the lower-level proposal method ` +
+              `unless the user supplied a complete Beancount change.`);
         } else if (info.output) {
           // When people are using common platform formats/outputs, most times people just want to use
           // them, not to edit them. Especially non-technical folks. We tell the agent to wait to be

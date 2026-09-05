@@ -4991,7 +4991,7 @@ class OverseerImpl implements AgentHooks {
     for (let gadget of gadgets) {
       // Managed-output bindings are implementation capabilities for their browser UI, not
       // workspace resources. Their agent-facing counterpart is the ambient Gatekeeper (for the
-      // Ledger, that is the approval-gated `propose_journal_edit` surface).
+      // Ledger, that is the approval-gated `propose_edit` surface).
       if (!exposeManagedGadgetBindingsToAgent(gadget)) continue;
       for (let [name, edge] of this.visibleBindings(gadget)) {
         if (!(name in result)) result[name] = edge.target;
