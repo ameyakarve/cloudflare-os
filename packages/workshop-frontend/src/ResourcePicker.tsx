@@ -35,6 +35,10 @@ export type SelectableItem = {
    */
   resourceUrlPatterns?: string[]
 } | {
+  type: 'provision'
+  vendorId: string
+  vendorDescription: VendorDescription
+} | {
   type: 'refine'
   resource: SupportedResource
   vendorDescription: VendorDescription
@@ -71,6 +75,7 @@ export interface ResourcePickerProps {
 }
 
 type AccountEntry = {
+  vendorId: string
   description: AccountDescription
   vendor: VendorDescription
   supportedResources: SupportedResource[]
@@ -119,10 +124,10 @@ export default function ResourcePicker({
     let cancelled = false
 
     const subscriber = new AccountsSubscriberAdapter({
-      add({ id, description, vendor, supportedResources, credentialsValid }) {
+      add({ id, description, vendor, supportedResources, credentialsValid, vendorId }) {
         setAllAccounts(prev => {
           const next = new Map(prev)
-          next.set(id, { description, vendor, supportedResources, credentialsValid })
+          next.set(id, { vendorId, description, vendor, supportedResources, credentialsValid })
           return next
         })
         // Clear reconnecting state if this account was being reconnected and is now valid.
@@ -141,7 +146,11 @@ export default function ResourcePicker({
         setAccountsLoaded(true)
       },
     })
-    const subscription = authenticatedApi.subscribeConnectedAccounts(subscriber)
+    // Resource bindings need the one canonical account even when an ambient vendor is forced and
+    // therefore hidden from the normal Connectors list.
+    const subscription = authenticatedApi.subscribeConnectedAccounts(subscriber, {
+      includeForcedAutoProvisionedAccounts: true,
+    })
     subscription.catch(error => {
       if (cancelled) return
       logRpcFailure('Failed to subscribe to connected accounts:', error)
@@ -266,9 +275,8 @@ export default function ResourcePicker({
   if (lowerSearch && httpItem && hasSpecificMatches) {
     matchedResources = matchedResources.filter(({ resource }) => resource.urlPattern !== 'https://*')
 
-    const httpVendorName = httpItem.vendor.description.displayName
     const httpAccounts = [...allAccounts.entries()]
-      .filter(([_, { vendor: v }]) => v.displayName === httpVendorName)
+      .filter(([_, account]) => account.vendorId === httpItem.vendor.id)
 
     const hasMatchingAccounts = lowerSearch
       ? httpAccounts.some(([_, { description }]) => {
@@ -301,7 +309,7 @@ export default function ResourcePicker({
       }
 
       let vendorAccounts = [...allAccounts.entries()]
-        .filter(([_, { vendor: v }]) => v.displayName === vendor.description.displayName)
+        .filter(([_, account]) => account.vendorId === vendor.id)
         .map(([id, data]) => ({ id, ...data }))
 
       if (accountsOnly && lowerSearch) {
@@ -324,14 +332,25 @@ export default function ResourcePicker({
         })
       }
 
-      // "Connect new account" row (not shown in accountsOnly mode).
+      // Credential-free ambient vendors have exactly one account. Provision it when absent; once
+      // present, the existing account row is the only choice. OAuth-style vendors may add more.
       if (!accountsOnly) {
-        items.push({
-          type: 'connect',
-          vendorId: vendor.id,
-          vendorDescription: vendor.description,
-          resourceUrlPatterns: resource.grantable ? [resource.urlPattern] : undefined,
-        })
+        if (vendor.description.autoProvisionsAccount) {
+          if (vendorAccounts.length === 0) {
+            items.push({
+              type: 'provision',
+              vendorId: vendor.id,
+              vendorDescription: vendor.description,
+            })
+          }
+        } else {
+          items.push({
+            type: 'connect',
+            vendorId: vendor.id,
+            vendorDescription: vendor.description,
+            resourceUrlPatterns: resource.grantable ? [resource.urlPattern] : undefined,
+          })
+        }
       }
     }
     return items
@@ -385,8 +404,10 @@ export default function ResourcePicker({
               onSelectAccount(item.accountId, item.vendorId, item.resource, item.accountDescription, item.vendorDescription)
             }
           }
-        } else {
+        } else if (item.type === 'connect') {
           handleConnectNew(item.vendorId, item.resourceUrlPatterns)
+        } else {
+          handleProvisionAmbient(item.vendorId)
         }
       }
       return () => { activateRef.current = null }
@@ -403,6 +424,18 @@ export default function ResourcePicker({
     } catch (error) {
       console.error('Failed to initiate connection:', error)
       toasts.add({ title: 'Failed to start connection flow', variant: 'error' })
+    } finally {
+      setConnectingVendor(null)
+    }
+  }
+
+  const handleProvisionAmbient = async (vendorId: string) => {
+    setConnectingVendor(vendorId)
+    try {
+      await authenticatedApi.provisionAmbientAccount(vendorId)
+    } catch (error) {
+      console.error('Failed to provision account:', error)
+      toasts.add({ title: 'Failed to add connection', variant: 'error' })
     } finally {
       setConnectingVendor(null)
     }
@@ -502,7 +535,7 @@ export default function ResourcePicker({
 
             // --- Full match or no-refine prefix: render with accounts ---
             let vendorAccounts = [...allAccounts.entries()]
-              .filter(([_, { vendor: v }]) => v.displayName === vendor.description.displayName)
+              .filter(([_, account]) => account.vendorId === vendor.id)
               .map(([id, data]) => ({ id, ...data }))
 
             // In accounts-only mode (HTTP alongside specific matches), only show
@@ -603,14 +636,26 @@ export default function ResourcePicker({
                   return <div key={account.id}>{accountRow}</div>
                 })}
 
-                {/* Connect new account */}
+                {/* Add the only ambient account, or connect another OAuth-style account. */}
                 {(() => {
                   if (accountsOnly) return null
+                  const ambient = !!vendor.description.autoProvisionsAccount
+                  if (ambient && vendorAccounts.length > 0) return null
                   const isActive = itemIdx === activeIndex
                   itemIdx++
                   return (
                   <div
-                    onClick={() => !connectingVendor && handleConnectNew(vendor.id, resource.grantable ? [resource.urlPattern] : undefined)}
+                    onClick={() => {
+                      if (connectingVendor) return
+                      if (ambient) {
+                        handleProvisionAmbient(vendor.id)
+                      } else {
+                        handleConnectNew(
+                          vendor.id,
+                          resource.grantable ? [resource.urlPattern] : undefined,
+                        )
+                      }
+                    }}
                     className={`${PICKER_ROW} ${isActive ? PICKER_ROW_ACTIVE : ''}`}
                     style={{
                       cursor: connectingVendor === vendor.id ? 'wait' : 'pointer',
@@ -624,7 +669,9 @@ export default function ResourcePicker({
                       )}
                     </span>
                     <span className="flex-1 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
-                      {connectingVendor === vendor.id ? 'Opening…' : 'Connect new account'}
+                      {connectingVendor === vendor.id
+                        ? ambient ? 'Adding…' : 'Opening…'
+                        : ambient ? `Add ${vendor.description.displayName}` : 'Connect new account'}
                     </span>
                     {isActive && <TabHint />}
                   </div>

@@ -1146,6 +1146,12 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     if ((await readAdminConfig(this.env)).disabledGatekeepers.includes(vendorId.toLowerCase())) {
       throw new Error(`The "${vendorId}" gatekeeper is disabled on this deployment.`);
     }
+    if ((await vendor.describe()).autoProvisionsAccount) {
+      throw new Error(
+        `The "${vendorId}" gatekeeper provides one account per user; ` +
+        "use provisionAmbientAccount() instead.",
+      );
+    }
 
     let accountId = this.storage.nextAccountId.get();
     this.storage.nextAccountId.put(accountId + 1);
@@ -1298,10 +1304,12 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async #provisionMissingAccounts(): Promise<void> {
-    // Which vendors already have an auto-provisioned account?
+    // Any existing account satisfies the one-account-per-user contract. Older resource pickers
+    // could incorrectly send ambient vendors through connectAccount(), leaving an otherwise-valid
+    // account without the autoProvisioned marker; do not mint another namespace beside it.
     let provisioned = new Set<string>();
     for (let rec of this.#connectedAccountRecords()) {
-      if (rec.autoProvisioned) provisioned.add(rec.vendorId);
+      provisioned.add(rec.vendorId);
     }
 
     let config = await readAdminConfig(this.env);
@@ -1380,6 +1388,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
     let connectedAccounts = this.storage.connectedAccounts;
     let vendors = this.vendors;
+    let connectedAccountRecords = () => this.#connectedAccountRecords();
 
     subscriber = subscriber.dup();  // keep stub after return
 
@@ -1390,13 +1399,33 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     // re-subscribes (e.g. on reconnect), matching other deployment config.
     let config = await readAdminConfig(this.env);
     let disabledGatekeeperSet = new Set(config.disabledGatekeepers);
+    let ambientVendorIds = new Set(
+      (await this.#ambientVendors()).map(({vendorId}) => vendorId));
+    // An ambient vendor represents one account, even if a historical client managed to persist
+    // duplicates through the OAuth-style connect path. Keep the oldest capability canonical; the
+    // records remain stored so existing gadget bindings are not mutated behind the user's back.
+    let canonicalAmbientAccountIds = new Map<string, number>();
+    for (let record of this.#connectedAccountRecords()) {
+      if (!ambientVendorIds.has(record.vendorId) ||
+          canonicalAmbientAccountIds.has(record.vendorId)) continue;
+      canonicalAmbientAccountIds.set(record.vendorId, record.id);
+    }
 
     async function notifyAdd(record: ConnectedAccountRecord) {
-      // Ambient (auto-provisioned) accounts only appear in the Connectors list when their vendor is
+      let isAmbient = ambientVendorIds.has(record.vendorId);
+      if (isAmbient) {
+        let canonicalId = canonicalAmbientAccountIds.get(record.vendorId);
+        if (canonicalId === undefined) {
+          canonicalAmbientAccountIds.set(record.vendorId, record.id);
+        } else if (canonicalId !== record.id) {
+          return;
+        }
+      }
+      // Ambient accounts only appear in the Connectors list when their vendor is
       // "optional" — i.e. the user opted in and can manage/remove it. "enabled" (forced) accounts have
       // nothing to manage, and "disabled" ones are dormant, so both are hidden.
       // Forced accounts are included when observer verification explicitly requests them.
-      if (record.autoProvisioned) {
+      if (isAmbient || record.autoProvisioned) {
         let mode = ambientGatekeeperMode(config, record.vendorId);
         if (mode === "disabled" ||
             (mode === "enabled" && !filter?.includeForcedAutoProvisionedAccounts)) {
@@ -1469,6 +1498,12 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
         if (seenIds.has(record.id)) {
           subscriber.remove(record.id);
           seenIds.delete(record.id);
+        }
+        if (canonicalAmbientAccountIds.get(record.vendorId) === record.id) {
+          canonicalAmbientAccountIds.delete(record.vendorId);
+          let replacement = [...connectedAccountRecords()]
+              .find(candidate => candidate.vendorId === record.vendorId);
+          if (replacement) void notifyAdd(replacement);
         }
       }
     }
