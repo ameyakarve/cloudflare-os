@@ -61,6 +61,11 @@
       // Private first-class resource bound to the deployment-managed My Ledger output.
       "tag": "v3",
       "new_sqlite_classes": [ "LedgerEditorGatekeeper" ]
+    },
+    {
+      // Read-only personal holdings bound to Paths to Points without an account flow.
+      "tag": "v4",
+      "new_sqlite_classes": [ "LedgerHoldingsGatekeeper" ]
     }
   ],
 

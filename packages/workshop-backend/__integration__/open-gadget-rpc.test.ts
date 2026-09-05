@@ -317,3 +317,42 @@ describe("deployment-managed Ledger workspace", () => {
     expect((await user.getGadget(workspaceIdString))?.pinned).toBe(true);
   });
 });
+
+describe("deployment-managed Paths to Points holdings", () => {
+  it("installs the authenticated holdings binding idempotently", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, "managedpoints");
+    const userId = exports.UserDurableObject.idFromName(account.username).toString();
+    const workspaceId = exports.OverseerDurableObject.newUniqueId();
+    const workspaceIdString = workspaceId.toString();
+    const user = exports.UserDurableObject.get(
+      exports.UserDurableObject.idFromName(account.username));
+    await user.newGadget(workspaceIdString, "Paths to Points");
+    const overseerDo = exports.OverseerDurableObject.get(workspaceId);
+    using workspace = await overseerDo.open(userId, account.username, () => {});
+    const source = new Y.Doc();
+    await overseerDo.initializeFromBlueprint(
+      Y.encodeStateAsUpdateV2(source),
+      "Paths to Points",
+      {id: "paths-to-points", noun: "Points Path", plural: "Points Paths", icon: "flowArrow"},
+    );
+    const ledgerIdentity = `${account.username}@example.com`;
+
+    expect(await overseerDo.configureMilesVaultPointsOutput(userId, ledgerIdentity)).toBe(true);
+    expect(await overseerDo.configureMilesVaultPointsOutput(userId, ledgerIdentity)).toBe(true);
+
+    const metadata = await workspace.getMetadata();
+    using gadget = await workspace.getGadget(metadata.defaultGadgetId!);
+    expect(await gadget.listBindings()).toEqual([expect.objectContaining({
+      name: "LEDGER",
+      resourceTitle: "My MilesVault points",
+    })]);
+    using ledgerBinding = await gadget.getBinding("LEDGER");
+    expect(await ledgerBinding?.describe()).toMatchObject({
+      url: "https://milesvault.com/ledger/current",
+      title: "My MilesVault points",
+      suggestedBindingName: "LEDGER",
+      tsType: "LedgerHoldingsSession",
+    });
+  });
+});

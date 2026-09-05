@@ -204,8 +204,10 @@ type LedgerEntryRef = {
 type LedgerBackend = {
   listEntries(): Promise<{rows: LedgerEntry[]}>;
   replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown>;
+  query_sql(sql: string): Promise<{rows: Array<Record<string, unknown>>}>;
   ledger_snapshot(): Promise<{
-    accounts: Array<{account: string, close_date: number | null}>;
+    today: number;
+    accounts: Array<{account: string, currencies: string[], close_date: number | null}>;
   }>;
 };
 
@@ -427,6 +429,145 @@ export class LedgerEditorGatekeeper
   }
 }
 
+type LedgerHoldingAccount = {account: string, currencies: string[]};
+type LedgerHoldingBalance = {
+  account: string;
+  currency: string;
+  scale: number;
+  balanceScaled: number;
+};
+type CurrentHoldings = {
+  asOf: number;
+  accounts: LedgerHoldingAccount[];
+  balances: LedgerHoldingBalance[];
+};
+type LedgerHoldingsGatekeeperProps = {ledgerKey: string};
+
+const LEDGER_HOLDINGS_RESOURCE_URL = "https://milesvault.com/ledger/current";
+const LEDGER_HOLDINGS_TYPES = `
+interface LedgerHoldingAccount {
+  account: string;
+  currencies: string[];
+}
+
+interface LedgerHoldingBalance {
+  account: string;
+  currency: string;
+  scale: number;
+  balanceScaled: number;
+}
+
+interface CurrentHoldings {
+  asOf: number;
+  accounts: LedgerHoldingAccount[];
+  balances: LedgerHoldingBalance[];
+}
+
+interface LedgerHoldingsSession {
+  currentHoldings(): Promise<CurrentHoldings>;
+}
+`;
+
+function ledgerHoldingString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`MilesVault ledger returned an invalid ${label}.`);
+  }
+  return value;
+}
+
+function ledgerHoldingInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error(`MilesVault ledger returned an invalid ${label}.`);
+  }
+  return value;
+}
+
+@validateRpc()
+class LedgerHoldingsSession extends RpcTarget {
+  constructor(private approvalQueue: NativeRpcStub<ApprovalQueue>, private ledger: LedgerBackend) {
+    super();
+  }
+
+  async currentHoldings(): Promise<CurrentHoldings> {
+    await this.approvalQueue.authorizeObservation({
+      title: "Read my current MilesVault points",
+      description: "Read open account identities and current balances from your MilesVault ledger.",
+    });
+    let [snapshot, balances] = await Promise.all([
+      this.ledger.ledger_snapshot(),
+      this.ledger.query_sql(
+          "SELECT account, currency, scale, balance_scaled FROM balance_totals"),
+    ]);
+    return {
+      asOf: ledgerHoldingInteger(snapshot.today, "snapshot date"),
+      accounts: snapshot.accounts.filter(account => account.close_date === null).map(account => ({
+        account: ledgerHoldingString(account.account, "account name"),
+        currencies: account.currencies.map(
+            currency => ledgerHoldingString(currency, "account currency")),
+      })),
+      balances: balances.rows.map(row => ({
+        account: ledgerHoldingString(row.account, "balance account"),
+        currency: ledgerHoldingString(row.currency, "balance currency"),
+        scale: ledgerHoldingInteger(row.scale, "balance scale"),
+        balanceScaled: ledgerHoldingInteger(row.balance_scaled, "scaled balance"),
+      })),
+    };
+  }
+
+  [Symbol.dispose](): void {
+    this.approvalQueue[Symbol.dispose]();
+  }
+}
+
+/** Read-only personal holdings installed by the deployment on Paths to Points outputs. */
+export class LedgerHoldingsGatekeeper
+    extends DurableObject<Cloudflare.Env, LedgerHoldingsGatekeeperProps>
+    implements Gatekeeper<LedgerHoldingsSession> {
+  async describe(): Promise<ResourceDescription> {
+    return {
+      url: LEDGER_HOLDINGS_RESOURCE_URL,
+      title: "My MilesVault points",
+      snippet: "Read your open rewards accounts and current balances.",
+      suggestedBindingName: "LEDGER",
+      tsType: "LedgerHoldingsSession",
+    };
+  }
+
+  async getTypeScriptTypes(): Promise<string> {
+    return LEDGER_HOLDINGS_TYPES;
+  }
+
+  async getAutoApprovableActions(): Promise<[]> {
+    return [];
+  }
+
+  async startSession(approvalQueue: NativeRpcStub<ApprovalQueue>): Promise<LedgerHoldingsSession> {
+    let env = this.env as unknown as {MILESVAULT_LEDGER: LedgerBackendNamespace};
+    if (!env.MILESVAULT_LEDGER) throw new Error("MilesVault Ledger service is unavailable.");
+    let ledger = env.MILESVAULT_LEDGER.get(
+        env.MILESVAULT_LEDGER.idFromName(this.ctx.props.ledgerKey));
+    return new LedgerHoldingsSession(approvalQueue.dup(), ledger);
+  }
+
+  applyAction(_action: number): Promise<void> {
+    throw new Error("This read-only Ledger binding has no actions.");
+  }
+
+  rejectAction(_action: number): Promise<void> {
+    throw new Error("This read-only Ledger binding has no actions.");
+  }
+
+  revertAction(_action: number): Promise<void> {
+    throw new Error("This read-only Ledger binding has no actions.");
+  }
+
+  async addObserver(): Promise<void> {
+    throw new Error("Personal MilesVault points cannot be shared.");
+  }
+
+  async removeObserver(): Promise<void> {}
+}
+
 // The capability handed to CODE_MODE_HARNESS's run() that lets executed code invoke
 // `env.<name>[restore](params)`. Only executeCode receives this capability -- gadget workers
 // never do -- and it's passed as a transient stub argument to run(), so it lives exactly as
@@ -525,7 +666,10 @@ type GatekeeperRecord = {
   // Trusted resources installed by the deployment rather than connected by a user. The marker
   // lets their owning system output repair the binding idempotently without trusting a title or
   // URL supplied by some unrelated Gatekeeper.
-  systemResource?: {type: "ledger", identityKey: string},
+  systemResource?: {
+    type: "ledger" | "ledgerHoldings";
+    identityKey: string;
+  },
 
   // Records how this gatekeeper was originally created, enabling blueprint metadata derivation.
   creationSpec?: GatekeeperCreationSpec;
@@ -7078,6 +7222,52 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     if (!this.impl.storage.prohibitAllSharing.get()) {
       this.impl.storage.prohibitAllSharing.put(true);
     }
+  }
+
+  /** Install or repair the authenticated, read-only LEDGER binding on Paths to Points. */
+  async configureMilesVaultPointsOutput(ownerId: string, ledgerKey: string): Promise<boolean> {
+    // This method is also called before opening a workspace whose ownership is not yet known to
+    // the authenticated API. Shared workspaces are never modified on behalf of the observer.
+    if (this.impl.ownerId !== ownerId) return false;
+    let pointsGadgets = [...this.impl.storage.gadgets.list()]
+        .filter(gadget => gadget.output?.id === "paths-to-points");
+    if (pointsGadgets.length === 0) return false;
+    if (pointsGadgets.length !== 1) {
+      throw new Error("MilesVault Paths to Points gadget is ambiguous.");
+    }
+    if (!ledgerKey || ledgerKey.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(ledgerKey)) {
+      throw new TypeError("Invalid MilesVault ledger key.");
+    }
+    let gadget = pointsGadgets[0];
+    let makeClass = (): GatekeeperClass =>
+      this.impl.ctx.exports.LedgerHoldingsGatekeeper({props: {ledgerKey}});
+    let edge = gadget.bindings.LEDGER;
+    let record = edge && this.impl.storage.gatekeepers.get(edge.target);
+
+    if (!record || record.systemResource?.type !== "ledgerHoldings") {
+      let id = this.impl.allocateWorkpieceId();
+      record = {
+        id,
+        class: makeClass(),
+        resourceTitle: "My MilesVault points",
+        resourceUrl: LEDGER_HOLDINGS_RESOURCE_URL,
+        systemResource: {type: "ledgerHoldings", identityKey: ledgerKey},
+      };
+      this.impl.storage.gatekeepers.put(record);
+      gadget.bindings.LEDGER = {target: id};
+      this.impl.storage.gadgets.put(gadget);
+      this.impl.bumpVersion([gadget.id]);
+    } else if (record.systemResource.identityKey !== ledgerKey) {
+      this.impl.ctx.facets.delete(`gatekeeper${record.id}`);
+      record.class = makeClass();
+      record.systemResource.identityKey = ledgerKey;
+      this.impl.storage.gatekeepers.put(record);
+    }
+
+    if (!this.impl.storage.prohibitAllSharing.get()) {
+      this.impl.storage.prohibitAllSharing.put(true);
+    }
+    return true;
   }
 
   /**
