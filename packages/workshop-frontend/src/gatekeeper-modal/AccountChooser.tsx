@@ -35,6 +35,7 @@ export function AccountChooser({
   selectedAccountId,
   vendorId,
   vendorName,
+  autoProvisionsAccount = false,
   resourceTitle,
   connecting,
   reconnectingAccountId,
@@ -49,6 +50,7 @@ export function AccountChooser({
   selectedAccountId: number | null
   vendorId?: string
   vendorName: string
+  autoProvisionsAccount?: boolean
   resourceTitle?: string
   connecting: boolean
   reconnectingAccountId: number | null
@@ -68,6 +70,8 @@ export function AccountChooser({
         <p className="mt-0.5 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
           {isEmailMailbox
             ? 'Enable the Email receiver account, then choose the mailbox name below.'
+            : autoProvisionsAccount
+            ? `${vendorName} provides one shared account for this user.`
             : `Pick which ${vendorName} identity this ${resourceTitle ?? 'connection'} should use.`}
         </p>
       </div>
@@ -139,7 +143,11 @@ export function AccountChooser({
           )
         })}
 
-        {(!isEmailMailbox || accounts.length === 0) && (
+        {(
+          autoProvisionsAccount
+            ? accounts.length === 0
+            : (!isEmailMailbox || accounts.length === 0)
+        ) && (
           <button
             type="button"
             onClick={onConnect}
@@ -153,6 +161,8 @@ export function AccountChooser({
             )}
             {isEmailMailbox
               ? 'Enable Email mailboxes'
+              : autoProvisionsAccount
+              ? connecting ? 'Adding...' : `Add ${vendorName}`
               : accounts.length === 0 ? `Connect ${vendorName}` : `Use another ${vendorName} account`}
           </button>
         )}

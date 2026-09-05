@@ -176,7 +176,9 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
       },
     })
 
-    const subscription = authenticatedApi.subscribeConnectedAccounts(subscriber)
+    const subscription = authenticatedApi.subscribeConnectedAccounts(subscriber, {
+      includeForcedAutoProvisionedAccounts: true,
+    })
     subscription.catch(err => {
       if (cancelled) return
       logRpcFailure('Failed to subscribe to connected accounts:', err)
@@ -192,16 +194,20 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     if (!authenticatedApi) return
     setConnectingVendor(vendorId)
     try {
-      const result = await authenticatedApi.connectAccount(vendorId)
-      window.open(result.url, '_blank', 'noopener,noreferrer')
-      toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      if (vendorById.get(vendorId.toLowerCase())?.description.autoProvisionsAccount) {
+        await authenticatedApi.provisionAmbientAccount(vendorId)
+      } else {
+        const result = await authenticatedApi.connectAccount(vendorId)
+        window.open(result.url, '_blank', 'noopener,noreferrer')
+        toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      }
     } catch (err) {
       console.error('Failed to initiate connection:', err)
       toasts.add({ title: 'Failed to start connection flow', variant: 'error' })
     } finally {
       setConnectingVendor(null)
     }
-  }, [authenticatedApi, toasts])
+  }, [authenticatedApi, toasts, vendorById])
 
   const handleReconnectAccount = useCallback(async (accountId: number) => {
     if (!authenticatedApi) return
@@ -1647,6 +1653,7 @@ function BlueprintGatekeeperBindingField({
         selectedAccountId={selectedAccountId}
         vendorId={binding.gatekeeperName}
         vendorName={vendor.description.displayName}
+        autoProvisionsAccount={vendor.description.autoProvisionsAccount}
         resourceTitle={resource.title}
         connecting={connectingVendor === binding.gatekeeperName}
         reconnectingAccountId={reconnectingAccountId}

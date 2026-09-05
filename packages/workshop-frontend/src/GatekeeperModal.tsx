@@ -101,6 +101,8 @@ type ConnectionType = {
   resourceUrlPattern?: string
   // Whether this resource type is independently grantable.
   grantable?: boolean
+  // Ambient vendors provide one credential-free account per user.
+  autoProvisionsAccount?: boolean
 }
 
 type VendorOption = {
@@ -160,6 +162,7 @@ function connectionForResource(vendor: VendorOption, resource: SupportedResource
     accent: vendor.description.color,
     resourceUrlPattern: resource.urlPattern,
     grantable: Boolean(resource.grantable),
+    autoProvisionsAccount: Boolean(vendor.description.autoProvisionsAccount),
   }
 }
 
@@ -427,7 +430,9 @@ export default function GatekeeperModal({
         setAccounts(Array.from(accountMap.values()))
       },
     })
-    const subscription = authenticatedApi.subscribeConnectedAccounts(subscriber)
+    const subscription = authenticatedApi.subscribeConnectedAccounts(subscriber, {
+      includeForcedAutoProvisionedAccounts: true,
+    })
     subscription.catch(error => {
       if (cancelled) return
       logRpcFailure('Failed to subscribe to connected accounts:', error)
@@ -594,9 +599,14 @@ export default function GatekeeperModal({
   const handleConnectAccount = async (vendorId: string, resourceUrlPatterns?: string[]) => {
     setConnectingVendor(vendorId)
     try {
-      const result = await authenticatedApi.connectAccount(vendorId, resourceUrlPatterns)
-      window.open(result.url, '_blank', 'noopener,noreferrer')
-      toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      const vendor = vendors.find(candidate => candidate.id === vendorId)
+      if (vendor?.description.autoProvisionsAccount) {
+        await authenticatedApi.provisionAmbientAccount(vendorId)
+      } else {
+        const result = await authenticatedApi.connectAccount(vendorId, resourceUrlPatterns)
+        window.open(result.url, '_blank', 'noopener,noreferrer')
+        toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      }
     } catch (error) {
       console.error('Failed to initiate connection:', error)
       reportIssue('gatekeeper.connect-start', error, { gatekeeperVendorId: vendorId })
@@ -829,6 +839,7 @@ export default function GatekeeperModal({
                     selectedAccountId={selectedAccountId}
                     vendorId={selectedConnection.vendorId}
                     vendorName={selectedConnection.vendor}
+                    autoProvisionsAccount={selectedConnection.autoProvisionsAccount}
                     resourceTitle={selectedConnection.resourceUrlPattern ? selectedConnection.title : undefined}
                     connecting={connectingVendor === selectedConnection.vendorId}
                     reconnectingAccountId={reconnectingAccountId}
