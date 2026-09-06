@@ -529,4 +529,16 @@ describe('GadgetUI RPC recovery', () => {
     const reloadedChild = connectIframe(container.querySelector('iframe')!)
     await expect(reloadedChild.read()).resolves.toBe('reloaded')
   })
+  it('lays out gadget UI against the device-width viewport', async () => {
+    const gadget = fakeGadget('responsive', 'document.body.textContent = "responsive"')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    expect(container.querySelector('iframe')!.srcdoc).toContain(
+      '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    )
+  })
+
 })
