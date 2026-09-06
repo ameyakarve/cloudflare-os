@@ -1,5 +1,7 @@
 export { default } from '../src/server.js';
 export * from '../src/server.js';
+// Name the preview loopbacks explicitly so the test pool discovers their entrypoints.
+export { GatekeeperLoopback, GadgetTailLoopback } from '../src/server.js';
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import type { DeploymentIdentity } from '@gadgets/workshop-shared/gatekeeper';
 import type { DeploymentAccessDecision } from '@gadgets/workshop-shared/deployment-access';
