@@ -1,3 +1,5 @@
+import { readDeploymentAccess } from "./deployment-access.js";
+import type { DeploymentAccessGrant } from "@gadgets/workshop-shared/deployment-access";
 import { RpcStub } from "capnweb";
 import { GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, SUGGESTED_MODELS, CollaboratorRole, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, GadgetMetadata, BlueprintMetadata, BlueprintLibrarySummary, BlueprintSource, BlueprintUserSummary, BLUEPRINT_SCREENSHOT_R2_PREFIX, GatekeeperVendorInfo, BlueprintOutput, OutputSummary, WorkpieceId, ListOutputsResult, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
 import { Gatekeeper, GatekeeperUser, GatekeeperUserVerifier, GatekeeperVendor, AccountDescription, VendorDescription, GatekeeperConnectCallback, SupportedResource, ResourceConfiguratorFrame, AppUiContext, GatekeeperUiFrame } from "@gadgets/workshop-shared/gatekeeper";
@@ -354,6 +356,22 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     }
 
     return false;
+  }
+
+  #accessGrant?: DeploymentAccessGrant;
+  #accessLookup?: Promise<DeploymentAccessGrant | undefined>;
+
+  /** Revalidate the stored deployment identity; cache only a still-valid affirmative grant. */
+  getDeploymentAccessGrant(): Promise<DeploymentAccessGrant | undefined> {
+    if (this.#accessGrant && this.#accessGrant.validUntil - Date.now() > 5_000) {
+      return Promise.resolve(this.#accessGrant);
+    }
+    if (this.#accessLookup) return this.#accessLookup;
+    this.#accessGrant = undefined;
+    this.#accessLookup = readDeploymentAccess(this.env, this.storage.deploymentIdentity.get()?.storageKey)
+        .then(grant => { this.#accessGrant = grant; return grant; })
+        .finally(() => { this.#accessLookup = undefined; });
+    return this.#accessLookup;
   }
 
   /** Bind identity supplied by the private ingress; this method is not exposed by the browser API. */

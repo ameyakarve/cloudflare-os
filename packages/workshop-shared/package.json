@@ -38,6 +38,10 @@
     "./beancount-editor": {
       "types": "./src/beancount-editor.ts",
       "import": "./src/beancount-editor.ts"
+    },
+    "./deployment-access": {
+      "types": "./src/deployment-access.ts",
+      "import": "./src/deployment-access.ts"
     }
   },
   "scripts": {
