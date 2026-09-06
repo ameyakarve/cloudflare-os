@@ -46,6 +46,7 @@ export default defineConfig({
         durableObjects: {
           TEST_OVERSEER: { className: 'OverseerDurableObject', useSQLite: true },
           TEST_USER: { className: 'UserDurableObject', useSQLite: true },
+          TEST_LEDGER_HOLDINGS: { className: 'LedgerHoldingsGatekeeper', useSQLite: true },
           TEST_IDENTITY_GATEKEEPER: { className: 'IdentityTestGatekeeper', useSQLite: true },
         },
       },

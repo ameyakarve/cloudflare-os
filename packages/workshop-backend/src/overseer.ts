@@ -1,3 +1,4 @@
+import { deploymentIdentity } from "./deployment-identity.js";
 import { deploymentAccessEnabled, DeploymentAccessError, watchDeploymentAccess } from "./deployment-access.js";
 import type { DeploymentAccessGrant } from "@gadgets/workshop-shared/deployment-access";
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
@@ -10380,9 +10381,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     if (pointsGadgets.length !== 1) {
       throw new Error("MilesVault Paths to Points gadget is ambiguous.");
     }
-    if (!ledgerKey || ledgerKey.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(ledgerKey)) {
-      throw new TypeError("Invalid MilesVault ledger key.");
-    }
+    deploymentIdentity(ledgerKey); // Same exact-key validation as the authenticated account provider.
     let gadget = pointsGadgets[0];
     let makeClass = (): GatekeeperClass =>
       this.impl.ctx.exports.LedgerHoldingsGatekeeper({props: {ledgerKey}});
@@ -10403,7 +10402,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       this.impl.storage.gadgets.put(gadget);
       this.impl.bumpVersion([gadget.id]);
     } else if (record.systemResource.identityKey !== ledgerKey) {
-      this.impl.ctx.facets.delete(`gatekeeper${record.id}`);
+      this.impl.ctx.facets.abort(`gatekeeper${record.id}`, new Error("Points account capability refreshed."));
       record.class = makeClass();
       record.systemResource.identityKey = ledgerKey;
       this.impl.storage.gatekeepers.put(record);
