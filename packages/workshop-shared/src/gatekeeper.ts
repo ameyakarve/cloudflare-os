@@ -515,14 +515,31 @@ export interface GatekeeperVendor extends WorkerEntrypoint {
   /**
    * Mint a NEW connected account, with no OAuth flow. Safe to expose on this public interface: it
    * only *creates* accounts — it cannot look up or return an existing account — and it takes no
-   * caller-controlled credentials. The Workshop supplies the authenticated profile id so a first-party
-   * vendor can mint a capability scoped to that same user; vendors must not treat arbitrary callers as
-   * trusted identity providers. The Workshop persists the returned account (like an OAuth-connected
+   * caller-controlled credentials. The Workshop persists the returned account (like an OAuth-connected
    * account) and treats it as the authority thereafter. Present only on vendors that
    * set VendorDescription.autoProvisionsAccount; callers gate on that flag rather than probing, since
    * RPC stubs cannot report optional-method presence.
    */
-  createAccount?(options?: {userId?: string}): Promise<Fetcher<GatekeeperUser>>;
+  createAccount?(): Promise<Fetcher<GatekeeperUser>>;
+}
+
+/** Identity established by a deployment's trusted authentication boundary, never by a Gadget. */
+export type DeploymentIdentity = {
+  /** Stable Workshop login subject; existing email subjects remain normalized. */
+  subject: string;
+  /** Exact external storage key; case and opaque identifiers must be preserved. */
+  storageKey: string;
+};
+
+/**
+ * Private deployment adapter for an existing first-party account. Bind as ACCOUNT_PROVIDER_<VENDOR>
+ * only when the deployment authorizes this vendor to receive its verified identity. This capability
+ * is never returned through the public Workshop API or offered as a Gadget binding. Ordinary
+ * GatekeeperVendor.createAccount remains identity-free.
+ */
+export interface DeploymentAccountProvider extends WorkerEntrypoint {
+  /** Mint a scoped account from the identity established at the trusted ingress. */
+  createAccount(identity: DeploymentIdentity): Promise<Fetcher<GatekeeperUser>>;
 }
 
 export interface GatekeeperConnectCallback extends WorkerEntrypoint {

@@ -7945,6 +7945,19 @@ class OverseerImpl implements AgentHooks {
     for (let gk of existingGatekeepers) {
       if (gk.creationSpec?.type !== "ambient") continue;
       if (currentAccountId.get(gk.creationSpec.vendorId) === gk.creationSpec.accountId) {
+        let accountId = gk.creationSpec.accountId;
+        let account = accounts.find(account => account.accountId === accountId);
+        if (account && (account.revision ?? 0) !== (gk.creationSpec.accountRevision ?? 0)) {
+          let cls = await ownerDo.getSingletonGatekeeperClass(account.accountId);
+          if (!cls) throw new Error("The refreshed account has no singleton capability.");
+          gk.class = cls;
+          gk.creationSpec = {...gk.creationSpec, accountRevision: account.revision};
+          this.storage.gatekeepers.put(gk);
+          this.ctx.facets.abort(`gatekeeper${gk.id}`, new Error("Account capability refreshed."));
+          if (this.#restartIfSessionsAffected("Account capability changed; observers must reverify.")) {
+            this.#gatekeepersPendingRestart.add(gk.id);
+          }
+        }
         bound.add(gk.creationSpec.vendorId);
       } else {
         this.removeGatekeeper(gk.id);
@@ -7971,7 +7984,8 @@ class OverseerImpl implements AgentHooks {
         // seed time from the gatekeeper's suggested binding name), not as any gadget's binding.
         await this.addGatekeeper(
             cls,
-            {type: "ambient", vendorId: account.vendorId, accountId: account.accountId});
+            {type: "ambient", vendorId: account.vendorId, accountId: account.accountId,
+              ...(account.revision ? {accountRevision: account.revision} : {})});
       } catch (err) {
         this.logger.error("failed to provision ambient capsule", {
           event: "ambient.capsule.provision.failed",

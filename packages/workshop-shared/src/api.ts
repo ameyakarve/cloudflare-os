@@ -3725,6 +3725,8 @@ export type GatekeeperCreationSpec = {
   type: "ambient";
   vendorId: string;        // the singleton gatekeeper's id (GATEKEEPER_<ID> suffix, lowercased)
   accountId: number;       // the owner's connected-account id for this singleton (in their user DO)
+  /** Account capability revision, allowing refresh without changing workpiece IDs or bindings. */
+  accountRevision?: number;
 };
 
 /**

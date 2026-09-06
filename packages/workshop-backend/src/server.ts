@@ -6,6 +6,7 @@ import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
 import { getServerConfig } from "./deployment-config.js";
 import { isPasswordAuthEnabled, getAuthGatekeeperAllowlist } from "./auth/config.js";
 import { getAuthVendorBinding } from "./auth/auth-vendors.js";
+import { deploymentIdentity } from "./deployment-identity.js";
 import { getUsageInfo } from "./ai-gateway-billing/limits/usage-checker.js";
 import { listConnectedAccounts, selectAccount } from "./ai-gateway-billing/cloudflare/connection-service.js";
 import { PendingLogin, LoginConnectCallbackImpl } from "./auth/login-flow.js";
@@ -794,6 +795,10 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
       source: this.env.MILESVAULT_AUTH === "true" ? "milesvault" : "cf_access",
     });
     let externalIdentityKey = this.accessPayload.externalIdentityKey;
+    if (this.env.MILESVAULT_AUTH === "true") {
+      if (typeof externalIdentityKey !== "string") throw new Error("Missing trusted deployment identity.");
+      await this.users.get(userId).bindDeploymentIdentity(deploymentIdentity(externalIdentityKey));
+    }
     return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession,
         typeof externalIdentityKey === "string" ? externalIdentityKey : email);
   }
@@ -925,13 +930,13 @@ export default {
         }
 
         if (env.MILESVAULT_AUTH === "true") {
-          const ledgerKey = req.headers.get("x-milesvault-user")?.trim();
-          if (!ledgerKey || ledgerKey.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(ledgerKey)) {
+          const ledgerKey = req.headers.get("x-milesvault-user");
+          if (!ledgerKey || ledgerKey.length > 254 || /\s/.test(ledgerKey)) {
             return new Response("Missing trusted MilesVault identity.", { status: 403 });
           }
           // OS keeps a normalized account identity; the existing MilesVault Durable Object key
           // remains exact and case-sensitive, and is carried separately to the Ledger output.
-          accessPayload = { email: ledgerKey.toLowerCase(), externalIdentityKey: ledgerKey };
+          accessPayload = { email: deploymentIdentity(ledgerKey).subject, externalIdentityKey: ledgerKey };
         } else {
           const payload = await verifyCfAccessJwt(req, env);
           if (!payload) return new Response("Invalid CF access JWT.", { status: 403 });
