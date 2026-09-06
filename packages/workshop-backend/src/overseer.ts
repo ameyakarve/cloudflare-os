@@ -1,3 +1,4 @@
+import type { DeploymentLedgerApplication, LedgerEditorSession, LedgerHoldingsSession, LedgerApplicationQueue } from "@gadgets/workshop-shared/deployment-ledger";
 import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, isDeploymentUsageError, UsageScope } from "./deployment-usage.js";
 import type { DeploymentUsage, DeploymentUsageRun, UsageGrant } from "@gadgets/workshop-shared/deployment-usage";
 import { deploymentIdentity } from "./deployment-identity.js";
@@ -205,387 +206,71 @@ interface RestoreForgerEntrypoint extends WorkerEntrypoint {
   forge(params: unknown): Promise<unknown>;
 }
 
-type LedgerEntryKind =
-    "txn" | "open" | "close" | "commodity" | "balance" | "price" | "note" | "document" | "event";
-
-type LedgerEntry = {
-  kind: LedgerEntryKind;
-  id: number;
-  raw_text: string;
-  updated_at: number;
-};
-
-type LedgerEntryRef = {
-  kind: LedgerEntryKind;
-  id: number;
-  expected_updated_at: number;
-};
-
-type LedgerBackend = {
-  listEntries(): Promise<{rows: LedgerEntry[]}>;
-  replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown>;
-  query_sql(sql: string): Promise<{rows: Array<Record<string, unknown>>}>;
-  ledger_snapshot(): Promise<{
-    today: number;
-    accounts: Array<{account: string, currencies: string[], close_date: number | null}>;
-  }>;
-};
-
-type LedgerEditorSupport = {
-  accountSuggestions(): Promise<{accounts: string[]}>;
-};
-
-type LedgerBackendNamespace = {
-  idFromName(name: string): DurableObjectId;
-  get(id: DurableObjectId): LedgerBackend;
-};
-
-type LedgerEditorGatekeeperProps = {ledgerKey: string};
 const LEDGER_RESOURCE_URL = "https://milesvault.com/ledger";
 const LEDGER_RESOURCE_TITLE = "My Ledger";
-
-type LedgerEditorSessionApi = {
-  listEntries(): Promise<{rows: LedgerEntry[]}>;
-  completionData(): Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}>;
-  replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown>;
-};
-
-const LEDGER_ENTRY_KINDS = new Set<LedgerEntryKind>([
-  "txn", "open", "close", "commodity", "balance", "price", "note", "document", "event",
-]);
-
-@validateRpc()
-class LedgerEditorSession extends RpcTarget implements LedgerEditorSessionApi {
-  #approvalQueue: NativeRpcStub<ApprovalQueue>;
-  #ledger: LedgerBackend;
-  #support?: LedgerEditorSupport;
-
-  constructor(approvalQueue: NativeRpcStub<ApprovalQueue>, ledger: LedgerBackend,
-              support?: LedgerEditorSupport) {
-    super();
-    this.#approvalQueue = approvalQueue;
-    this.#ledger = ledger;
-    this.#support = support;
-  }
-
-  /** Load the canonical journal rows for the owning MilesVault user. */
-  async listEntries(): Promise<{rows: LedgerEntry[]}> {
-    let result = await this.#ledger.listEntries();
-    await this.#approvalQueue.authorizeObservation({
-      title: "Read my Ledger",
-      description: `Read ${result.rows.length} journal entries from my MilesVault Ledger.`,
-    });
-    return result;
-  }
-
-  /** Hydrate the same ledger-first, graph-catalogue-second account completion used in production. */
-  async completionData(): Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}> {
-    let result = await loadLedgerCompletionData(this.#ledger, this.#support);
-    await this.#approvalQueue.authorizeObservation({
-      title: "Read Ledger account suggestions",
-      description: `Read ${result.ledgerAccounts.length} open Ledger accounts and ` +
-          `${result.catalogueAccounts.length} catalogue accounts for editor completion.`,
-    });
-    return result;
-  }
-
-  /** Run MilesVault's existing OCC-checked, atomic journal replacement. */
-  async replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown> {
-    validateLedgerReplaceInput(input);
-    // This binding is installed only on the private, immutable My Ledger system output. Save is
-    // an explicit human editor gesture there, so it deliberately preserves the existing immediate
-    // save contract rather than turning that click into a second approval-screen interaction.
-    return this.#ledger.replaceBuffer(input);
-  }
-
-  [Symbol.dispose](): void {
-    this.#approvalQueue[Symbol.dispose]();
-  }
-}
-
-function validateLedgerReplaceInput(
-    input: {knownIds: LedgerEntryRef[], buffer: string}): void {
-  if (!input || !Array.isArray(input.knownIds) || typeof input.buffer !== "string") {
-    throw new TypeError("replaceBuffer requires knownIds and a Beancount buffer.");
-  }
-  if (input.buffer.length > 5_000_000 || input.knownIds.length > 100_000) {
-    throw new TypeError("Ledger update is too large.");
-  }
-  for (let [index, ref] of input.knownIds.entries()) {
-    if (!ref || !LEDGER_ENTRY_KINDS.has(ref.kind) ||
-        !Number.isSafeInteger(ref.id) || ref.id <= 0 ||
-        !Number.isSafeInteger(ref.expected_updated_at)) {
-      throw new TypeError(`Invalid knownIds[${index}].`);
-    }
-  }
-}
-
-async function loadLedgerCompletionData(
-    ledger: LedgerBackend, support?: LedgerEditorSupport)
-    : Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}> {
-  let [snapshot, catalogue] = await Promise.all([
-    ledger.ledger_snapshot(),
-    support?.accountSuggestions().catch(() => ({accounts: []})) ??
-        Promise.resolve({accounts: []}),
-  ]);
-  let clean = (values: string[]) => [...new Set(values.filter(value =>
-    typeof value === "string" && value.length > 0 && value.length <= 512))].slice(0, 10_000);
-  return {
-    ledgerAccounts: clean(snapshot.accounts
-        .filter(account => account.close_date === null)
-        .map(account => account.account)),
-    catalogueAccounts: clean(catalogue.accounts),
-  };
-}
-
-/**
- * Capability handed only to the authenticated browser rendering the managed Ledger output.
- * It deliberately is not a Gadget method or a binding in the agent's executeCode environment:
- * a human Save gesture keeps the existing immediate editor contract, while an AI write has only
- * the approval-gated ambient Ledger Gatekeeper available.
- */
-class LedgerEditorUiSession extends RpcTarget implements LedgerEditorSessionApi {
-  constructor(private ledger: LedgerBackend, private support?: LedgerEditorSupport) {
-    super();
-  }
-
-  listEntries(): Promise<{rows: LedgerEntry[]}> {
-    return this.ledger.listEntries();
-  }
-
-  completionData(): Promise<{ledgerAccounts: string[], catalogueAccounts: string[]}> {
-    return loadLedgerCompletionData(this.ledger, this.support);
-  }
-
-  replaceBuffer(input: {knownIds: LedgerEntryRef[], buffer: string}): Promise<unknown> {
-    validateLedgerReplaceInput(input);
-    return this.ledger.replaceBuffer(input);
-  }
-}
-
-const LEDGER_EDITOR_TYPES = `
-type LedgerEntryKind =
-  | "txn" | "open" | "close" | "commodity" | "balance"
-  | "price" | "note" | "document" | "event";
-
-interface LedgerEntry {
-  kind: LedgerEntryKind;
-  id: number;
-  raw_text: string;
-  updated_at: number;
-}
-
-interface LedgerEntryRef {
-  kind: LedgerEntryKind;
-  id: number;
-  expected_updated_at: number;
-}
-
-interface LedgerEditorSession {
-  listEntries(): Promise<{ rows: LedgerEntry[] }>;
-  completionData(): Promise<{
-    ledgerAccounts: string[];
-    catalogueAccounts: string[];
-  }>;
-  replaceBuffer(input: {
-    knownIds: LedgerEntryRef[];
-    buffer: string;
-  }): Promise<unknown>;
-}
-`;
-
-/** First-class Ledger editor resource installed only on the managed My Ledger output. */
-export class LedgerEditorGatekeeper
-    extends DurableObject<Cloudflare.Env, LedgerEditorGatekeeperProps>
-    implements Gatekeeper<LedgerEditorSessionApi> {
-  async describe(): Promise<ResourceDescription> {
-    return {
-      url: LEDGER_RESOURCE_URL,
-      title: LEDGER_RESOURCE_TITLE,
-      snippet: "Read and edit your canonical MilesVault journal.",
-      suggestedBindingName: "LEDGER",
-      tsType: "LedgerEditorSession",
-    };
-  }
-
-  async getTypeScriptTypes(): Promise<string> {
-    return LEDGER_EDITOR_TYPES;
-  }
-
-  async getAutoApprovableActions(): Promise<[]> {
-    return [];
-  }
-
-  async startSession(approvalQueue: NativeRpcStub<ApprovalQueue>)
-      : Promise<LedgerEditorSessionApi> {
-    let env = this.env as unknown as {
-      MILESVAULT_LEDGER: LedgerBackendNamespace,
-      MILESVAULT_EDITOR_SUPPORT?: LedgerEditorSupport,
-    };
-    if (!env.MILESVAULT_LEDGER) throw new Error("MilesVault Ledger service is unavailable.");
-    let ledger = env.MILESVAULT_LEDGER.get(
-        env.MILESVAULT_LEDGER.idFromName(this.ctx.props.ledgerKey));
-    return new LedgerEditorSession(approvalQueue.dup(), ledger, env.MILESVAULT_EDITOR_SUPPORT);
-  }
-
-  applyAction(_action: number): Promise<void> {
-    throw new Error("This Ledger binding does not queue actions.");
-  }
-
-  rejectAction(_action: number): Promise<void> {
-    throw new Error("This Ledger binding does not queue actions.");
-  }
-
-  revertAction(_action: number): Promise<void> {
-    throw new Error("This Ledger binding does not queue actions.");
-  }
-
-  async addObserver(_id: string, _user: Fetcher): Promise<void> {
-    throw new Error("My Ledger cannot be shared.");
-  }
-
-  async removeObserver(_id: string): Promise<void> {
-    // My Ledger cannot be shared, so there is no observer state to remove.
-  }
-}
-
-type LedgerHoldingAccount = {account: string, currencies: string[]};
-type LedgerHoldingBalance = {
-  account: string;
-  currency: string;
-  scale: number;
-  balanceScaled: number;
-};
-type CurrentHoldings = {
-  asOf: number;
-  accounts: LedgerHoldingAccount[];
-  balances: LedgerHoldingBalance[];
-};
+const LEDGER_HOLDINGS_RESOURCE_URL = "https://milesvault.com/ledger/current";
+type LedgerEditorGatekeeperProps = {ledgerKey: string};
 type LedgerHoldingsGatekeeperProps = {ledgerKey: string};
 
-const LEDGER_HOLDINGS_RESOURCE_URL = "https://milesvault.com/ledger/current";
-const LEDGER_HOLDINGS_TYPES = `
-interface LedgerHoldingAccount {
-  account: string;
-  currencies: string[];
+function ledgerApplication(env: Cloudflare.Env): Service<DeploymentLedgerApplication> {
+  if (!env.MILESVAULT_LEDGER_APP) throw new Error("MilesVault Ledger application is unavailable.");
+  return env.MILESVAULT_LEDGER_APP;
 }
 
-interface LedgerHoldingBalance {
-  account: string;
-  currency: string;
-  scale: number;
-  balanceScaled: number;
-}
-
-interface CurrentHoldings {
-  asOf: number;
-  accounts: LedgerHoldingAccount[];
-  balances: LedgerHoldingBalance[];
-}
-
-interface LedgerHoldingsSession {
-  currentHoldings(): Promise<CurrentHoldings>;
-}
-`;
-
-function ledgerHoldingString(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`MilesVault ledger returned an invalid ${label}.`);
+// Adapt the general Gatekeeper queue to a native, narrow service contract. In particular, no
+// generic hook controller, action submission, or optional-method union crosses this boundary.
+class LedgerApplicationQueueAdapter extends NativeRpcTarget implements LedgerApplicationQueue {
+  #queue: NativeRpcStub<ApprovalQueue>;
+  constructor(queue: NativeRpcStub<ApprovalQueue>) { super(); this.#queue = queue.dup(); }
+  authorizeObservation(description: ObservationDescription) { return this.#queue.authorizeObservation(description); }
+  async getUsageBudget(): Promise<DeploymentUsageRun | undefined> {
+    return (this.#queue as NativeRpcStub<ApprovalQueue & Required<Pick<ApprovalQueue, "getUsageBudget">>>).getUsageBudget();
   }
-  return value;
+  [Symbol.dispose]() { this.#queue[Symbol.dispose](); }
 }
 
-function ledgerHoldingInteger(value: unknown, label: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-    throw new Error(`MilesVault ledger returned an invalid ${label}.`);
+/** Stable persisted facet name; the deployment service owns editor behavior and authority. */
+export class LedgerEditorGatekeeper
+    extends DurableObject<Cloudflare.Env, LedgerEditorGatekeeperProps>
+    implements Gatekeeper<LedgerEditorSession> {
+  async describe(): Promise<ResourceDescription> {
+    return {url: LEDGER_RESOURCE_URL, title: LEDGER_RESOURCE_TITLE,
+      snippet: "Read your canonical MilesVault journal. Human Save is available in the managed editor.",
+      suggestedBindingName: "LEDGER", tsType: "LedgerEditorSession"};
   }
-  return value;
+  getTypeScriptTypes(): Promise<string> { return ledgerApplication(this.env).getEditorTypes(); }
+  async getAutoApprovableActions(): Promise<[]> { return []; }
+  async startSession(queue: NativeRpcStub<ApprovalQueue>): Promise<LedgerEditorSession> {
+    using scope = new NativeRpcStub(new LedgerApplicationQueueAdapter(queue));
+    return await ledgerApplication(this.env).openEditorResource(this.ctx.props.ledgerKey, scope);
+  }
+  async applyAction(_action: number): Promise<void> { throw new Error("This Ledger resource has no queued actions."); }
+  async rejectAction(_action: number): Promise<void> { throw new Error("This Ledger resource has no queued actions."); }
+  async revertAction(_action: number): Promise<void> { throw new Error("This Ledger resource has no queued actions."); }
+  async addObserver(_id: string, _user: Fetcher): Promise<void> { throw new Error("My Ledger cannot be shared."); }
+  async removeObserver(_id: string): Promise<void> {}
 }
 
-@validateRpc()
-class LedgerHoldingsSession extends RpcTarget {
-  constructor(private approvalQueue: NativeRpcStub<ApprovalQueue>, private ledger: LedgerBackend) {
-    super();
-  }
-
-  async currentHoldings(): Promise<CurrentHoldings> {
-    await this.approvalQueue.authorizeObservation({
-      title: "Read my current MilesVault points",
-      description: "Read open account identities and current balances from your MilesVault ledger.",
-    });
-    let [snapshot, balances] = await Promise.all([
-      this.ledger.ledger_snapshot(),
-      this.ledger.query_sql(
-          "SELECT account, currency, scale, balance_scaled FROM balance_totals"),
-    ]);
-    return {
-      asOf: ledgerHoldingInteger(snapshot.today, "snapshot date"),
-      accounts: snapshot.accounts.filter(account => account.close_date === null).map(account => ({
-        account: ledgerHoldingString(account.account, "account name"),
-        currencies: account.currencies.map(
-            currency => ledgerHoldingString(currency, "account currency")),
-      })),
-      balances: balances.rows.map(row => ({
-        account: ledgerHoldingString(row.account, "balance account"),
-        currency: ledgerHoldingString(row.currency, "balance currency"),
-        scale: ledgerHoldingInteger(row.scale, "balance scale"),
-        balanceScaled: ledgerHoldingInteger(row.balance_scaled, "scaled balance"),
-      })),
-    };
-  }
-
-  [Symbol.dispose](): void {
-    this.approvalQueue[Symbol.dispose]();
-  }
-}
-
-/** Read-only personal holdings installed by the deployment on Paths to Points outputs. */
+/** Stable persisted facet name; the deployment service owns the read-only holdings projection. */
 export class LedgerHoldingsGatekeeper
     extends DurableObject<Cloudflare.Env, LedgerHoldingsGatekeeperProps>
     implements Gatekeeper<LedgerHoldingsSession> {
   async describe(): Promise<ResourceDescription> {
-    return {
-      url: LEDGER_HOLDINGS_RESOURCE_URL,
-      title: "My MilesVault points",
+    return {url: LEDGER_HOLDINGS_RESOURCE_URL, title: "My MilesVault points",
       snippet: "Read your open rewards accounts and current balances.",
-      suggestedBindingName: "LEDGER",
-      tsType: "LedgerHoldingsSession",
-    };
+      suggestedBindingName: "LEDGER", tsType: "LedgerHoldingsSession"};
   }
-
-  async getTypeScriptTypes(): Promise<string> {
-    return LEDGER_HOLDINGS_TYPES;
+  getTypeScriptTypes(): Promise<string> { return ledgerApplication(this.env).getHoldingsTypes(); }
+  async getAutoApprovableActions(): Promise<[]> { return []; }
+  async startSession(queue: NativeRpcStub<ApprovalQueue>): Promise<LedgerHoldingsSession> {
+    using scope = new NativeRpcStub(new LedgerApplicationQueueAdapter(queue));
+    return await ledgerApplication(this.env).openHoldings(this.ctx.props.ledgerKey, scope);
   }
-
-  async getAutoApprovableActions(): Promise<[]> {
-    return [];
-  }
-
-  async startSession(approvalQueue: NativeRpcStub<ApprovalQueue>): Promise<LedgerHoldingsSession> {
-    let env = this.env as unknown as {MILESVAULT_LEDGER: LedgerBackendNamespace};
-    if (!env.MILESVAULT_LEDGER) throw new Error("MilesVault Ledger service is unavailable.");
-    let ledger = env.MILESVAULT_LEDGER.get(
-        env.MILESVAULT_LEDGER.idFromName(this.ctx.props.ledgerKey));
-    return new LedgerHoldingsSession(approvalQueue.dup(), ledger);
-  }
-
-  applyAction(_action: number): Promise<void> {
-    throw new Error("This read-only Ledger binding has no actions.");
-  }
-
-  rejectAction(_action: number): Promise<void> {
-    throw new Error("This read-only Ledger binding has no actions.");
-  }
-
-  revertAction(_action: number): Promise<void> {
-    throw new Error("This read-only Ledger binding has no actions.");
-  }
-
-  async addObserver(): Promise<void> {
-    throw new Error("Personal MilesVault points cannot be shared.");
-  }
-
-  async removeObserver(): Promise<void> {}
+  async applyAction(_action: number): Promise<void> { throw new Error("This read-only Ledger resource has no actions."); }
+  async rejectAction(_action: number): Promise<void> { throw new Error("This read-only Ledger resource has no actions."); }
+  async revertAction(_action: number): Promise<void> { throw new Error("This read-only Ledger resource has no actions."); }
+  async addObserver(_id: string, _user: Fetcher): Promise<void> { throw new Error("My points cannot be shared."); }
+  async removeObserver(_id: string): Promise<void> {}
 }
 
 // The capability handed to CODE_MODE_HARNESS's run() that lets executed code invoke
@@ -5606,15 +5291,13 @@ class OverseerImpl implements AgentHooks {
     if (!gatekeeper?.systemResource || gatekeeper.systemResource.type !== "ledger") {
       throw new Error("Canonical MilesVault Ledger UI binding is unavailable.");
     }
-    let env = this.env as unknown as {
-      MILESVAULT_LEDGER: LedgerBackendNamespace,
-      MILESVAULT_EDITOR_SUPPORT?: LedgerEditorSupport,
-    };
-    if (!env.MILESVAULT_LEDGER) throw new Error("MilesVault Ledger service is unavailable.");
-    let ledger = env.MILESVAULT_LEDGER.get(
-        env.MILESVAULT_LEDGER.idFromName(gatekeeper.systemResource.identityKey));
-    return new NativeRpcStub(
-        new LedgerEditorUiSession(ledger, env.MILESVAULT_EDITOR_SUPPORT)) as unknown as RpcStub<any>;
+    // Only the authenticated managed-UI route reaches this factory. Agent/code bindings use
+    // openEditorResource and cannot obtain the immediate-Save capability.
+    using queue = new NativeRpcStub(new ApprovalQueueImpl(this, gatekeeper.id,
+        {from: "user", chatId}));
+    using scope = new NativeRpcStub(new LedgerApplicationQueueAdapter(queue));
+    return await ledgerApplication(this.env).openBrowserEditor(gatekeeper.systemResource.identityKey,
+        scope) as unknown as RpcStub<any>;
   }
 
   // The gadget's file tree as seen from `chatId` (its chat content; the caller is presumed to
