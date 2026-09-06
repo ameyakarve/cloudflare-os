@@ -11,8 +11,6 @@ const kumoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-kumo-run
 const kumoStylesOutputFile = resolve(packageDir, "src/generated/gadget-kumo-styles.txt");
 const graphRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-graph-runtime.txt");
 const geoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-geo-runtime.txt");
-const gadgetClientUpgradeOutputFile = resolve(packageDir, "src/generated/gadget-client-upgrade.txt");
-const ledgerClientUpgradeOutputFile = resolve(packageDir, "src/generated/ledger-client-upgrade.txt");
 
 const runtimeResult = await build({
   entryPoints: [resolve(packageDir, "browser/browser-export-runtime.ts")],
@@ -73,19 +71,6 @@ const kumoRuntimeBytes = kumoRuntimeResult.outputFiles[0].contents;
 const graphRuntimeBytes = graphRuntimeResult.outputFiles[0].contents;
 const geoRuntimeBytes = geoRuntimeResult.outputFiles[0].contents;
 const kumoStylesBytes = readFileSync(fileURLToPath(import.meta.resolve("@cloudflare/kumo/styles/standalone")));
-const gadgetClientUpgradeBytes = process.env.GADGET_CLIENT_UPGRADE_PATH
-  ? readFileSync(resolve(packageDir, process.env.GADGET_CLIENT_UPGRADE_PATH))
-  // Wrangler invokes this build script a second time through `build.command`. Preserve the client
-  // selected by the deployment build instead of replacing it when that nested invocation no
-  // longer carries the deployment-only source path.
-  : existsSync(gadgetClientUpgradeOutputFile)
-    ? readFileSync(gadgetClientUpgradeOutputFile)
-    : new Uint8Array();
-const ledgerClientUpgradeBytes = process.env.GADGET_LEDGER_CLIENT_UPGRADE_PATH
-  ? readFileSync(resolve(packageDir, process.env.GADGET_LEDGER_CLIENT_UPGRADE_PATH))
-  : existsSync(ledgerClientUpgradeOutputFile)
-    ? readFileSync(ledgerClientUpgradeOutputFile)
-    : new Uint8Array();
 assertContains(kumoRuntimeBytes, ".Kumo=Object.freeze", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Button:", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Textarea:", "Kumo browser runtime");
@@ -98,15 +83,6 @@ assertContains(geoRuntimeBytes, ".GadgetGeo=Object.freeze", "Gadget geo runtime"
 assertContains(geoRuntimeBytes, "RouteGlobe:", "Gadget geo runtime");
 assertContains(kumoStylesBytes, "--color-kumo-brand", "Kumo standalone styles");
 assertContains(kumoStylesBytes, ".bg-kumo-base", "Kumo standalone styles");
-if (gadgetClientUpgradeBytes.byteLength > 0) {
-  assertContains(gadgetClientUpgradeBytes, "const { Fragment, createElement: h", "Gadget client upgrade");
-  assertContains(gadgetClientUpgradeBytes, "GadgetUI.mount(h(App))", "Gadget client upgrade");
-}
-if (ledgerClientUpgradeBytes.byteLength > 0) {
-  assertContains(ledgerClientUpgradeBytes, "const { BeancountEditor } = GadgetUI", "Ledger client upgrade");
-  assertContains(ledgerClientUpgradeBytes, "GadgetUI.mount(h(App))", "Ledger client upgrade");
-}
-
 writeIfChanged(runtimeOutputFile, runtimeResult.outputFiles[0].contents);
 writeIfChanged(sanitizerOutputFile, sanitizerResult.outputFiles[0].contents);
 writeIfChanged(pageOutputFile, pageResult.outputFiles[0].contents);
@@ -114,8 +90,6 @@ writeIfChanged(kumoRuntimeOutputFile, kumoRuntimeBytes);
 writeIfChanged(graphRuntimeOutputFile, graphRuntimeBytes);
 writeIfChanged(geoRuntimeOutputFile, geoRuntimeBytes);
 writeIfChanged(kumoStylesOutputFile, kumoStylesBytes);
-writeIfChanged(gadgetClientUpgradeOutputFile, gadgetClientUpgradeBytes);
-writeIfChanged(ledgerClientUpgradeOutputFile, ledgerClientUpgradeBytes);
 
 function assertContains(bytes, marker, label) {
   if (!new TextDecoder().decode(bytes).includes(marker)) {

@@ -81,8 +81,6 @@ const EXPECTED: Record<string, ExpectedArea> = {
   "packages/workshop-backend": {
     uncached: [
       "FORMAT_BLUEPRINTS_DIR",
-      "GADGET_CLIENT_UPGRADE_PATH",
-      "GADGET_LEDGER_CLIENT_UPGRADE_PATH",
     ],
   },
   // `build-gatekeeper-configurator.ts` is covered in detail by
