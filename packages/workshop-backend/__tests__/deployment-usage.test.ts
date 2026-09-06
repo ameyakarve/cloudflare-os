@@ -177,7 +177,13 @@ it("charges schedule starts and refuses retained callbacks, observations and wri
         description: {title: "Fixture", description: "No external effects"},
         callback: callback as unknown as Hook["callback"], controller: callback});
       try {
+        // A user observation receives a remote User DO stub, unlike the local borrowed target
+        // used by an agent/hook. Both must survive the same native scope admission path.
+        await impl.chargeUsage({from: "user"}, {capabilityCalls: 1});
         const firing = await instance.startHook(1);
+        using nativeQueue = new RpcStub(firing.approvalQueue);
+        using budget = await nativeQueue.getUsageBudget();
+        expect((await budget!.getGrant()).allowed).toBe(true);
         // The native hook is the fixture's deliver method; the runtime intentionally returns a
         // vendor-neutral RpcTarget because hook method names are vendor-defined.
         const target = firing.callback as unknown as Pick<import("./deployment-identity-worker.js").IdentityTestHook, "deliver">;

@@ -41,9 +41,36 @@ export default defineConfig({
     cloudflareTest({
       main: './__tests__/deployment-identity-worker.ts',
       miniflare: {
+        serviceBindings: {MILESVAULT_LEDGER_APP: {name: "ledger-app-fixture", entrypoint: "LedgerApplication"}},
+        workers: [{name: "ledger-app-fixture", modules: true, compatibilityDate: "2026-09-04",
+          script: `
+            import {WorkerEntrypoint, RpcTarget} from "cloudflare:workers";
+            class Editor extends RpcTarget {
+              #key; #save; #queue;
+              constructor(key, save, queue) { super(); this.#key = key; this.#save = save; this.#queue = queue.dup(); }
+              async listEntries() {
+                await this.#queue.authorizeObservation({title: "Fixture read", description: "No canonical data"});
+                return {rows: [{kind: "note", id: 1, raw_text: this.#key, updated_at: 1}]};
+              }
+              async completionData() { return {ledgerAccounts: [], catalogueAccounts: []}; }
+              async replaceBuffer() { if (!this.#save) throw new Error("Browser Save only"); return {savedBy: this.#key}; }
+              [Symbol.dispose]() { this.#queue[Symbol.dispose](); }
+            }
+            class Holdings extends RpcTarget {
+              async currentHoldings() { return {asOf: 20260906, accounts: [], balances: []}; }
+            }
+            export class LedgerApplication extends WorkerEntrypoint {
+              async openBrowserEditor(key, queue) { return new Editor(key, true, queue); }
+              async openEditorResource(key, queue) { return new Editor(key, false, queue); }
+              async openHoldings() { return new Holdings(); }
+              async getEditorTypes() { return "interface LedgerEditorSession {}"; }
+              async getHoldingsTypes() { return "interface LedgerHoldingsSession {}"; }
+            }
+          `}],
         compatibilityDate: '2026-09-04',
         compatibilityFlags: ['experimental', 'nodejs_compat', 'allow_irrevocable_stub_storage'],
         durableObjects: {
+          TEST_LEDGER_EDITOR: {className: "LedgerEditorGatekeeper", useSQLite: true},
           TEST_OVERSEER: { className: 'OverseerDurableObject', useSQLite: true },
           TEST_USER: { className: 'UserDurableObject', useSQLite: true },
           TEST_LANGUAGE_MODEL: { className: 'LanguageModelGatekeeper', useSQLite: true },

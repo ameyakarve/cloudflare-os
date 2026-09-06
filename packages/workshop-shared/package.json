@@ -46,6 +46,10 @@
     "./deployment-usage": {
       "types": "./src/deployment-usage.ts",
       "import": "./src/deployment-usage.ts"
+    },
+    "./deployment-ledger": {
+      "types": "./src/deployment-ledger.ts",
+      "import": "./src/deployment-ledger.ts"
     }
   },
   "scripts": {
