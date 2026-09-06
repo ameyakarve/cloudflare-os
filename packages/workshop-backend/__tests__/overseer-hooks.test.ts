@@ -16,6 +16,7 @@ function makeOverseer(
     env: { BLUEPRINTS: { get: getConfig } },
     impl: {
       checkDeploymentAccess: async () => undefined,
+      newUsageScope: async () => undefined,
       // The quarantine gate (see the dedicated pending-restart tests); no connection is blocked
       // in these fixtures.
       assertGatekeeperUsable: () => {},

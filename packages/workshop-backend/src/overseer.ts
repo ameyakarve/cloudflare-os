@@ -1,3 +1,5 @@
+import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, isDeploymentUsageError, UsageScope } from "./deployment-usage.js";
+import type { DeploymentUsage, DeploymentUsageRun, UsageGrant } from "@gadgets/workshop-shared/deployment-usage";
 import { deploymentIdentity } from "./deployment-identity.js";
 import { deploymentAccessEnabled, DeploymentAccessError, watchDeploymentAccess } from "./deployment-access.js";
 import type { DeploymentAccessGrant } from "@gadgets/workshop-shared/deployment-access";
@@ -616,6 +618,7 @@ class RestoreForgerImpl extends NativeRpcTarget {
 
 // Per-chat in-memory state, used while an agent is running or agent callbacks are pending.
 type LiveChatContext = {
+  usageScope?: UsageScope;
   // Abort controller for the running agent (if any).
   cancelController: AbortController;
 
@@ -1305,6 +1308,8 @@ type ExternalChatRecord = {
 };
 
 type ActiveAgentRecord = {
+  // Persisted before inference so a restart cannot reset the same turn's allowance or deadline.
+  deploymentUsageRun?: UsageGrant;
   chatId: number;
   // Hex durable object ID of the initiator's user DO, used to re-resolve the model config and for
   // billing.
@@ -2154,6 +2159,39 @@ class OverseerImpl implements AgentHooks {
         .catch(() => { throw new DeploymentAccessError(); });
     if (grants.some(grant => !grant || grant.validUntil <= Date.now())) throw new DeploymentAccessError();
     return { allowed: true, validUntil: Math.min(...grants.map(grant => grant!.validUntil)) };
+  }
+
+  /** Begin a quota scope using the workspace owner's privately stored identity. */
+  async newUsageScope(existing?: UsageGrant): Promise<UsageScope | undefined> {
+    if (!deploymentUsageEnabled(this.env)) return undefined;
+    await this.checkDeploymentAccess();
+    if (!this.ownerId) throw new DeploymentUsageError();
+    const run = await boundedUsage(this.users.get(this.users.idFromString(this.ownerId)).beginDeploymentUsageRun(existing?.runId));
+    if (!run) throw new DeploymentUsageError();
+    return UsageScope.open(run);
+  }
+
+  /** Share agent allowance with its tools; ordinary user operations receive a fresh bounded run. */
+  async getUsageBudget(caller: GatekeeperCaller): Promise<DeploymentUsageRun | undefined> {
+    if (!deploymentUsageEnabled(this.env)) return undefined;
+    const chatId = caller.from === "hook" ? undefined : caller.chatId;
+    const active = chatId === undefined ? undefined : this.#liveChats.get(chatId)?.usageScope;
+    if (active) return active.borrow();
+    if (caller.from === "agent") throw new DeploymentUsageError("expired_run");
+    await this.checkDeploymentAccess();
+    if (!this.ownerId) throw new DeploymentUsageError();
+    const run = await boundedUsage(this.users.get(this.users.idFromString(this.ownerId)).beginDeploymentUsageRun());
+    if (!run) throw new DeploymentUsageError();
+    return run;
+  }
+
+  async chargeUsage(caller: GatekeeperCaller, usage: DeploymentUsage, existing?: UsageScope): Promise<void> {
+    if (existing) { await existing.reserve(usage); return; }
+    if (!deploymentUsageEnabled(this.env)) return;
+    const run = await this.getUsageBudget(caller);
+    // The local object may be a borrowed RpcTarget; mint a native stub for the lifetime helper.
+    await using scope = await UsageScope.open(new NativeRpcStub(run!));
+    await scope.reserve(usage);
   }
 
   // Forcefully tear down all live state for a chat (e.g. on deletion).
@@ -6017,8 +6055,9 @@ class OverseerImpl implements AgentHooks {
   }
 
   async authorizeObservation(gatekeeperId: number, description: ObservationDescription,
-                             caller: GatekeeperCaller): Promise<void> {
+                             caller: GatekeeperCaller, usageScope?: UsageScope): Promise<void> {
     await this.checkDeploymentAccess();
+    await this.chargeUsage(caller, {capabilityCalls: 1}, usageScope);
     if (description.prohibitAllSharing) {
       if ((await this.getSharingManager()).hasAnyShares()) {
         throw new Error(
@@ -6290,9 +6329,10 @@ class OverseerImpl implements AgentHooks {
   }
 
   async submitAction(gatekeeperId: number, action: number,
-                     description: ActionDescription, caller: GatekeeperCaller)
+                     description: ActionDescription, caller: GatekeeperCaller, usageScope?: UsageScope)
       : Promise<void> {
     await this.checkDeploymentAccess();
+    await this.chargeUsage(caller, {capabilityCalls: 1, pendingWrites: 1}, usageScope);
     let gatekeeper = this.storage.gatekeepers.get(gatekeeperId);
     if (this.storage.prohibitAllSharing.get() &&
         !allowActionInPrivateLedgerWorkspace(gatekeeper)) {
@@ -6355,8 +6395,9 @@ class OverseerImpl implements AgentHooks {
 
   async bindHook<Hook extends RpcTarget>(
         gatekeeperId: number, controller: Fetcher<HookController<Hook>>,
-        callback: NativeRpcStub<Hook>, description: HookDescription, caller: GatekeeperCaller)
+        callback: NativeRpcStub<Hook>, description: HookDescription, caller: GatekeeperCaller, usageScope?: UsageScope)
         : Promise<void> {
+    await this.chargeUsage(caller, {capabilityCalls: 1, pendingWrites: 1}, usageScope);
     let hookId = this.storage.nextHookId.get();
     this.storage.nextHookId.put(hookId + 1);
 
@@ -7495,7 +7536,20 @@ class OverseerImpl implements AgentHooks {
     });
 
     let accessWatch: Disposable | undefined;
+    let usageAbort: (() => void) | undefined;
     try {
+      const activeRecord = this.storage.activeAgents.get(chatId);
+      liveChat.usageScope = await this.newUsageScope(activeRecord?.deploymentUsageRun);
+      if (liveChat.usageScope) {
+        if (activeRecord && !activeRecord.deploymentUsageRun) {
+          activeRecord.deploymentUsageRun = liveChat.usageScope.grant;
+          this.storage.activeAgents.put(activeRecord);
+        }
+        const signal = liveChat.usageScope.controller.signal;
+        usageAbort = () => liveChat.cancelController.abort(signal.reason);
+        signal.addEventListener("abort", usageAbort, {once: true});
+        signal.throwIfAborted();
+      }
       if (deploymentAccessEnabled(this.env)) {
         accessWatch = await watchDeploymentAccess(
             () => this.checkDeploymentAccess(initiator),
@@ -7546,6 +7600,7 @@ class OverseerImpl implements AgentHooks {
       let chosenModel = getModel(
           this.env, aiModel.config, initiator, {
             sessionAffinity,
+            usageScope: liveChat.usageScope,
             userGateway: byokRouting,
             metadata: { source: "chat", gadgetId: this.ctx.id.toString(), chatId },
           });
@@ -7635,7 +7690,7 @@ class OverseerImpl implements AgentHooks {
       // Report unexpected failures for triage. Skip expected provider 4xx (auth,
       // rate limit, quota/billing), which are ordinary control flow, not incidents.
       const apiStatus = apiError?.statusCode;
-      if (!(err instanceof DeploymentAccessError) && (apiStatus === undefined || apiStatus >= 500)) {
+      if (!(err instanceof DeploymentAccessError) && !isDeploymentUsageError(err) && (apiStatus === undefined || apiStatus >= 500)) {
         reportIssue("overseer.run-agent", err, {
           attributes: obsContext.get(),
           http: apiStatus === undefined
@@ -7669,6 +7724,9 @@ class OverseerImpl implements AgentHooks {
       liveChat.activeAgentCallbacks.clear();
     } finally {
       accessWatch?.[Symbol.dispose]();
+      if (usageAbort) liveChat.usageScope?.controller.signal.removeEventListener("abort", usageAbort);
+      await liveChat.usageScope?.[Symbol.asyncDispose]();
+      liveChat.usageScope = undefined;
       // If this turn billed the user's own Cloudflare account, refresh their cached balance now (in
       // the background) so the next turn's billing decision reflects the spend just incurred. Runs
       // on both the success and error paths — an "insufficient funds" failure is exactly when an
@@ -8129,7 +8187,8 @@ class OverseerImpl implements AgentHooks {
       subject: string, takenNames: Set<string>,
       quick: {config: AiModelConfig, initiator: AiChatAuthorInfo}): Promise<string | undefined> {
     try {
-      let model = getModel(this.env, quick.config, quick.initiator);
+      await using budget = await this.newUsageScope();
+      let model = getModel(this.env, quick.config, quick.initiator, {usageScope: budget});
       let result = await completeText(model, {
         signal: AbortSignal.timeout(10_000),
         prompt:
@@ -8874,7 +8933,9 @@ class OverseerImpl implements AgentHooks {
                             modelConfig: AiModelConfig,
                             initiator: AiChatAuthorInfo): Promise<void> {
     try {
+      await using budget = await this.newUsageScope();
       let model = getModel(this.env, modelConfig, initiator, {
+        usageScope: budget,
         metadata: { source: "thread-title", gadgetId: this.ctx.id.toString(), chatId },
       });
 
@@ -8931,7 +8992,9 @@ class OverseerImpl implements AgentHooks {
         }
       }
 
+      await using budget = await this.newUsageScope();
       let model = getModel(this.env, modelConfig, initiator, {
+        usageScope: budget,
         metadata: { source: "gadget-title", gadgetId: this.ctx.id.toString(), chatId },
       });
 
@@ -10804,6 +10867,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   startGatekeeperHook(id: number): NativeRpcStub<RpcTarget> {
+    if (deploymentUsageEnabled(this.env)) throw new Error("Reconnect this legacy hook before using it with deployment usage limits.");
     // TODO: There's a bug in workerd, if we return the RpcTarget directly here, because it is a
     //   Proxy, serializeJsValueWithPipeline() decides it is non-pipelineable, which is incorrect.
     //   Manually wrapping in a stub works around the problem for now.
@@ -10830,14 +10894,23 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     // have landed while it was in flight, and issuing from the captured record would hand out a
     // firing on a dead hook (the enableHookRecord/disableHook idiom).
     record = requireLiveHook(this.impl, hookId);
+    const budget = await this.impl.newUsageScope();
+    try {
+      await budget?.reserve({scheduledStarts: 1, capabilityCalls: 1});
+      record = requireLiveHook(this.impl, hookId);
+    } catch (error) { await budget?.[Symbol.asyncDispose](); throw error; }
+    let leases = 2;
+    const finish = () => { if (budget) this.ctx.waitUntil(budget[Symbol.asyncDispose]()); };
+    const release = () => { if (--leases === 0) finish(); };
+    budget?.controller.signal.addEventListener("abort", finish, {once: true});
 
     // Both returned capabilities revalidate the hook per call rather than trusting this moment:
     // they are held outside this DO (even across resets -- the stored callback is a persistent
     // stub), so this is what ties them to the firing, per the session contract documented on
     // Gatekeeper.bindHook (workshop-shared/gatekeeper.ts).
     return {
-      callback: makeHookFiringCallback(this.impl, hookId),
-      approvalQueue: new ApprovalQueueImpl(this.impl, record.gatekeeperId, {from: "hook"}, hookId),
+      callback: makeHookFiringCallback(this.impl, hookId, budget, release),
+      approvalQueue: new ApprovalQueueImpl(this.impl, record.gatekeeperId, {from: "hook"}, hookId, budget, release),
     };
   }
 
@@ -13608,7 +13681,7 @@ function requireLiveHook(impl: OverseerImpl, hookId: number): BoundHookRecord {
 // firing as independent stubs (the bindHook contract permits hooks to pass and return them) and
 // are not re-checked per call. That is deliberate: the holder is a gatekeeper bound by the session
 // contract, and this is a guard against a stale firing by mistake, not a revocable membrane.
-function makeHookFiringCallback(impl: OverseerImpl, hookId: number): NativeRpcStub<RpcTarget> {
+function makeHookFiringCallback(impl: OverseerImpl, hookId: number, budget?: UsageScope, release?: () => void): NativeRpcStub<RpcTarget> {
   // The proxy target must be callable for the `apply` trap to ever fire (a Proxy over a
   // non-callable target is itself non-callable), and the bindHook contract allows the bound
   // callback to be a function type, invoked by calling the firing's callback directly. An arrow
@@ -13621,6 +13694,7 @@ function makeHookFiringCallback(impl: OverseerImpl, hookId: number): NativeRpcSt
     // uncaught, too).
     async apply(_target, _thisArg, args: unknown[]) {
       await impl.checkDeploymentAccess();
+      await budget?.reserve({capabilityCalls: 1});
       let record = requireLiveHook(impl, hookId);
       return Reflect.apply(record.callback as any, undefined, args);
     },
@@ -13628,9 +13702,11 @@ function makeHookFiringCallback(impl: OverseerImpl, hookId: number): NativeRpcSt
       // All wildcard properties of a stub appear as functions, so `then` must come back
       // undefined (this is not a thenable) and symbols are never RPC methods -- the same
       // dispositions as getGadgetFacet's proxy over the gadget facet.
+      if (prop === Symbol.dispose) return release;
       if (typeof prop === "symbol" || prop === "then") return undefined;
       return async (...args: unknown[]) => {
         await impl.checkDeploymentAccess();
+        await budget?.reserve({capabilityCalls: 1});
         let record = requireLiveHook(impl, hookId);
         return Reflect.apply((record.callback as any)[prop], record.callback, args);
       };
@@ -13650,14 +13726,23 @@ class ApprovalQueueImpl extends RpcTarget implements ApprovalQueue {
   // prohibitAllSharing). Session queues (openSession) pass no hookId: they are bounded by the
   // facet's in-DO lifetime, which the session chokepoints already gate.
   constructor(private impl: OverseerImpl, private gatekeeperId: number,
-              private caller: GatekeeperCaller, private hookId?: number) {
+              private caller: GatekeeperCaller, private hookId?: number,
+              private usageScope?: UsageScope, private releaseUsage?: () => void) {
     super();
   }
 
   authorizeObservation(description: ObservationDescription): Promise<void> {
     if (this.hookId !== undefined) requireLiveHook(this.impl, this.hookId);
-    return this.impl.authorizeObservation(this.gatekeeperId, description, this.caller);
+    return this.impl.authorizeObservation(this.gatekeeperId, description, this.caller, this.usageScope);
   }
+
+  getUsageBudget(): Promise<DeploymentUsageRun | undefined> {
+    if (this.hookId !== undefined) requireLiveHook(this.impl, this.hookId);
+    if (this.usageScope) return Promise.resolve(this.usageScope.borrow());
+    return this.impl.getUsageBudget(this.caller);
+  }
+
+  [Symbol.dispose]() { this.releaseUsage?.(); }
 
   async getGitCache(): Promise<GitCache> {
     return new GitCacheImpl(this.impl.gitCache, this.gatekeeperId);
@@ -13665,7 +13750,7 @@ class ApprovalQueueImpl extends RpcTarget implements ApprovalQueue {
 
   submitAction(action: number, description: ActionDescription): Promise<void> {
     if (this.hookId !== undefined) requireLiveHook(this.impl, this.hookId);
-    return this.impl.submitAction(this.gatekeeperId, action, description, this.caller);
+    return this.impl.submitAction(this.gatekeeperId, action, description, this.caller, this.usageScope);
   }
 
   async bindHook<Hook extends RpcTarget>(
@@ -13673,7 +13758,7 @@ class ApprovalQueueImpl extends RpcTarget implements ApprovalQueue {
         description: HookDescription): Promise<void> {
     await this.impl.checkDeploymentAccess();
     if (this.hookId !== undefined) requireLiveHook(this.impl, this.hookId);
-    return this.impl.bindHook(this.gatekeeperId, controller, callback, description, this.caller);
+    return this.impl.bindHook(this.gatekeeperId, controller, callback, description, this.caller, this.usageScope);
   }
 }
 
@@ -13720,7 +13805,7 @@ export class AgentSpawnerGatekeeper
 
   async startSession(approvalQueue: NativeRpcStub<ApprovalQueue>)
       : Promise<AgentSpawnerBinding> {
-    return new AgentSpawnerBindingImpl(this.ctx);
+    return new AgentSpawnerBindingImpl(this.ctx, approvalQueue);
   }
 
   applyAction(action: number): Promise<void> {
@@ -13749,9 +13834,12 @@ export class AgentSpawnerGatekeeper
 
 @validateRpc()
 class AgentSpawnerBindingImpl extends RpcTarget implements AgentSpawnerBinding {
-  constructor(private ctx: DurableObjectState<AgentSpawnerBindingProps>) {
+  #approvalQueue: NativeRpcStub<ApprovalQueue>;
+  constructor(private ctx: DurableObjectState<AgentSpawnerBindingProps>, approvalQueue: NativeRpcStub<ApprovalQueue>) {
     super();
+    this.#approvalQueue = approvalQueue.dup();
   }
+  [Symbol.dispose]() { this.#approvalQueue[Symbol.dispose](); }
 
   #getOverseer() {
     let ns = this.ctx.exports.OverseerDurableObject;
@@ -13760,14 +13848,15 @@ class AgentSpawnerBindingImpl extends RpcTarget implements AgentSpawnerBinding {
   }
 
   async spawn(title: string, prompt: string): Promise<void> {
-    // TODO: Should we be calling authorizeObservation() here? It's not really observing anything,
-    //   but you might want the audit logs? But also, the agents show up in the chat history so
-    //   maybe it's not really necessary to include them in the audit log too.
+    await this.#approvalQueue.authorizeObservation({title: "Start an agent",
+      description: "Start an agent with this connection's configured resources."});
     return this.#getOverseer().spawnAgent(
         title, prompt, this.ctx.props.config, this.ctx.props.creatorUserId);
   }
 
   async spawnCallable(title: string, prompt: string): Promise<Fetcher<any>> {
+    await this.#approvalQueue.authorizeObservation({title: "Start a callable agent",
+      description: "Start a callable agent with this connection's configured resources."});
     return this.#getOverseer().spawnAgent(
         title, prompt, this.ctx.props.config, this.ctx.props.creatorUserId, true);
   }
