@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  upgradeLegacyGadgetClient,
   upgradeLegacyLedgerServer,
   withGadgetKumo,
 } from "../src/gadget-kumo";
@@ -44,52 +43,45 @@ describe("Gadget Kumo runtime", () => {
     expect(bundle).not.toContain('style.dataset.kumo = "2.9.2"');
   });
 
-  it("upgrades the saved pre-Kumo Award Explorer snapshot", () => {
+  it("preserves saved Award Explorer clients and their customizations", () => {
     const legacy = `
 const { h, page, hero, row, button, input, select, field, card, badge, notice, empty, loading, mount } = Kumo;
 mount(page({}, hero({
   description: "Compare published programme pricing across schedule-backed direct and one-stop routes."
 })));
 `;
-    const modern = "const { Button } = Kumo; GadgetUI.mount(React.createElement(Button));";
-    expect(upgradeLegacyGadgetClient(legacy, modern)).toBe(modern);
+    const customizedLegacy = legacy + "\nconst userFeature = 'keep my itinerary notes';";
+    expect(withGadgetKumo(customizedLegacy).endsWith(customizedLegacy)).toBe(true);
     const original = `
 const CABINS = [];
 const style = document.createElement("style");
 style.textContent = \`body { background: #faf8f3; }\`;
 const description = "Compare programme pricing across direct and one-stop routes. Chart-derived guidance, built for deciding where to search next.";
 `;
-    expect(upgradeLegacyGadgetClient(original, modern)).toBe(modern);
+    expect(withGadgetKumo(original).endsWith(original)).toBe(true);
     const badGlobe = `
 function RouteGlobe({ option, origin, destination, airports }) {
   const project = code => [code.length, code.length];
 }
 const guide = "Published and observed pricing, not live seats";
 `;
-    expect(upgradeLegacyGadgetClient(badGlobe, modern)).toBe(modern);
-    expect(upgradeLegacyGadgetClient("const { h, page } = Kumo;", modern))
-      .toBe("const { h, page } = Kumo;");
+    expect(withGadgetKumo(badGlobe).endsWith(badGlobe)).toBe(true);
   });
 
-  it("upgrades only the deployment-owned Ledger snapshot", () => {
+  it("preserves saved Ledger clients even when they contain historical deployment markers", () => {
     const oldLedger = `
 const { Badge, Banner, Button, Loader, Surface, Text, Textarea } = Kumo;
 function plan(rows, buffer) { return { rows, buffer }; }
 function App() { return h(Textarea, { value: "Your canonical MilesVault journal" }); }
 `;
-    const modernLedger = "const { BeancountEditor } = GadgetUI;";
-    expect(upgradeLegacyGadgetClient(oldLedger, "award", modernLedger)).toBe(modernLedger);
+    const customizedLedger = oldLedger + "\nconst userFeature = 'keep my account filters';";
+    expect(withGadgetKumo(customizedLedger).endsWith(customizedLedger)).toBe(true);
     const firstCodeMirrorLedger = `
 const { Banner, Button, Loader, Surface, Text } = Kumo;
 const { BeancountEditor } = GadgetUI;
 function App() { return h(Text, { size: "sm" }, "All accounts"); }
 `;
-    expect(upgradeLegacyGadgetClient(firstCodeMirrorLedger, "award", modernLedger))
-      .toBe(modernLedger);
-    expect(upgradeLegacyGadgetClient("h(Textarea, { value: userCode });", "award", modernLedger))
-      .toBe("h(Textarea, { value: userCode });");
-    expect(upgradeLegacyGadgetClient("const { BeancountEditor } = GadgetUI;", "award", modernLedger))
-      .toBe("const { BeancountEditor } = GadgetUI;");
+    expect(withGadgetKumo(firstCodeMirrorLedger).endsWith(firstCodeMirrorLedger)).toBe(true);
   });
 
   it("makes every saved managed Ledger server inert to agent RPC", () => {
