@@ -215,6 +215,10 @@ it("revalidates a retained language-model session before every run", async () =>
     }})}));
     using queue = new RpcStub(new RefusedQueue());
     using session = await model.startSession(queue);
+    const attacker = session as unknown as RpcStub<{props: {config: {apiToken: string}}}>;
+    let leaked: unknown;
+    try { leaked = await attacker.props.config.apiToken; } catch { /* private state has no RPC path */ }
+    expect(leaked).toBeUndefined();
     for (let i = 0; i < 2; i++) {
       let failure = "";
       try { await session.run({prompt: "Hello"}); } catch (error) { failure = String(error); }

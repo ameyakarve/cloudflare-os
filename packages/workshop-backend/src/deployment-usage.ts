@@ -75,12 +75,13 @@ export class DeploymentUsageRunImpl extends RpcTarget implements DeploymentUsage
 
 /** A borrowed lease cannot finish its parent agent's run. */
 class BorrowedUsageRun extends RpcTarget implements DeploymentUsageRun {
-  constructor(private run: RpcStub<DeploymentUsageRun>) { super(); }
-  getGrant() { return this.run.getGrant(); }
-  reserve(usage: DeploymentUsage) { return this.run.reserve(usage); }
-  settleTokens(id: string, tokens: number) { return this.run.settleTokens(id, tokens); }
+  #run: RpcStub<DeploymentUsageRun>;
+  constructor(run: RpcStub<DeploymentUsageRun>) { super(); this.#run = run; }
+  getGrant() { return this.#run.getGrant(); }
+  reserve(usage: DeploymentUsage) { return this.#run.reserve(usage); }
+  settleTokens(id: string, tokens: number) { return this.#run.settleTokens(id, tokens); }
   async finish() {}
-  [Symbol.dispose]() { this.run[Symbol.dispose](); }
+  [Symbol.dispose]() { this.#run[Symbol.dispose](); }
 }
 
 /** Local lifetime/deadline companion; authority remains in the canonical quota store. */
