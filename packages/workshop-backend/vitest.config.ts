@@ -49,6 +49,8 @@ export default defineConfig({
               #key; #save; #queue;
               constructor(key, save, queue) { super(); this.#key = key; this.#save = save; this.#queue = queue.dup(); }
               async listEntries() {
+                using budget = await this.#queue.getUsageBudget();
+                if (budget) await budget.getGrant();
                 await this.#queue.authorizeObservation({title: "Fixture read", description: "No canonical data"});
                 return {rows: [{kind: "note", id: 1, raw_text: this.#key, updated_at: 1}]};
               }

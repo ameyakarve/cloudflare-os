@@ -3,7 +3,10 @@ import { DEFAULT_ADMIN_CONFIG, serializeAdminConfig } from "../src/admin-config.
 import { OverseerDurableObject } from "../src/overseer.js";
 import { openFakeOverseer } from "./fixtures.js";
 
-vi.mock("capnweb-validate", () => ({ validateRpc: () => () => undefined }));
+vi.mock("capnweb-validate", () => ({
+  validateRpc: () => () => undefined,
+  skipRpcValidation: () => () => undefined,
+}));
 
 function makeOverseer(
     getConfig: () => Promise<string | null>,
