@@ -68,11 +68,13 @@ const EXPECTED: Record<string, ExpectedArea> = {
   "packages/workshop-frontend": {
     forwarded: [
       "VITE_BACKEND_HOST",
+      "VITE_BASE_PATH",
       "VITE_CF_ACCESS_MODE",
       "VITE_DEV_AUTO_LOGIN",
       "VITE_DEV_PASSWORD",
       "VITE_DEV_USERNAME",
       "VITE_FRONTEND_ERROR_REPORTING",
+      "VITE_MILESVAULT_AUTH_MODE",
     ],
     injected: ["NODE_ENV"],
   },
