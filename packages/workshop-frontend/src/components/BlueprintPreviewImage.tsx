@@ -1,5 +1,6 @@
 import { Hexagon } from '@phosphor-icons/react'
 import { getGradient } from './BlueprintCard'
+import { appPath } from '../appPath'
 
 export function BlueprintPreviewImage({
   blueprintId,
@@ -16,7 +17,7 @@ export function BlueprintPreviewImage({
     <div className={`overflow-hidden rounded-xl border border-kumo-line bg-kumo-tint ${className ?? ''}`}>
       {screenshotUrl ? (
         <img
-          src={screenshotUrl}
+          src={appPath(screenshotUrl)}
           alt={`Screenshot of ${title}`}
           className="aspect-[16/9] w-full object-cover"
           loading="lazy"

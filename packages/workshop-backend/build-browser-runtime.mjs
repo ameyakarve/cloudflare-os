@@ -41,6 +41,8 @@ const sanitizerResult = await build({
   write: false,
 });
 const kumoRuntimeResult = await build({
+  // A wrapper may also install workshop-shared: retain one editor instance per bundle.
+  alias: Object.fromEntries(['@codemirror/state', '@codemirror/view', '@codemirror/language', '@lezer/common', '@lezer/highlight', '@lezer/lr'].map(name => [name, fileURLToPath(import.meta.resolve(name))])),
   entryPoints: [resolve(packageDir, "browser/gadget-kumo-runtime.ts")],
   bundle: true,
   format: "iife",

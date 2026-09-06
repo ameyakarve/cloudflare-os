@@ -1,8 +1,8 @@
+import { beancountLanguage } from "@gadgets/workshop-shared/beancount-editor";
 import { CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
 import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
-  beancountLanguage,
   createBeancountCompletionSource,
 } from "../browser/beancount-completion.js";
 

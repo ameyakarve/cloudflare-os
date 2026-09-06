@@ -188,7 +188,7 @@ const reporter: BrowserReporter = reportingEnabled
       sessionId: getSessionId(),
       browser: getBrowserFacts(),
       reportedUserId: () => currentReportedUserId,
-      transport: (report) => fetch('/api/client-errors', {
+      transport: (report) => fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/client-errors`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(report),

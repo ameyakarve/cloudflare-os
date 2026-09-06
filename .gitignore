@@ -20,7 +20,7 @@ packages/workshop-backend/src/generated/browser-export-page.js
 .run-local-stamp
 
 # Cloudflare Workers
-.wrangler/
+.wrangler
 .env
 
 # Local dev secrets (loaded by run-dev-server.ts)
@@ -44,3 +44,11 @@ wrangler.dev.jsonc
 .dev.vars.*
 **/.dev.vars
 **/.dev.vars.*
+
+# Deployment-generated MilesVault browser runtimes and managed client upgrades.
+packages/workshop-backend/src/generated/gadget-kumo-runtime.txt
+packages/workshop-backend/src/generated/gadget-kumo-styles.txt
+packages/workshop-backend/src/generated/gadget-graph-runtime.txt
+packages/workshop-backend/src/generated/gadget-geo-runtime.txt
+packages/workshop-backend/src/generated/gadget-client-upgrade.txt
+packages/workshop-backend/src/generated/ledger-client-upgrade.txt

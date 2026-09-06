@@ -1,6 +1,11 @@
-import { abortAllDurableObjects, runInDurableObject } from "cloudflare:test";
-import { exports } from "cloudflare:workers";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import * as Y from "yjs";
+import {
+  abortAllDurableObjects,
+  createExecutionContext,
+  runInDurableObject,
+} from "cloudflare:test";
+import { env, exports } from "cloudflare:workers";
+import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import {
   createOpenGadgetError,
   getOpenGadgetErrorCode,
@@ -8,9 +13,10 @@ import {
   type AuthenticatedApi,
   type OpenGadgetErrorCode,
   type PublicApi,
+  type WorkpieceSummary,
 } from "@gadgets/workshop-shared/api";
+import server from "../src/server";
 import { describe, expect, it } from "vitest";
-import * as Y from "yjs";
 
 type CodedError = Error & { code?: unknown };
 
@@ -47,9 +53,11 @@ function expectRpcCode(error: CodedError, code: OpenGadgetErrorCode): void {
 }
 
 async function connect(): Promise<RpcStub<PublicApi>> {
-  const response = await exports.default.fetch(new Request("https://workshop.invalid/api", {
+  // A service-binding fetch context ends with the upgrade response, before the socket callbacks.
+  // Invoke the handler directly so the WebSocket session shares the test's execution context.
+  const response = await server.fetch(new Request("https://workshop.invalid/api", {
     headers: { Upgrade: "websocket" },
-  }));
+  }), env, createExecutionContext());
 
   expect(response.status).toBe(101);
   const socket = response.webSocket;
@@ -140,7 +148,7 @@ describe.skip("openGadget errors across native RPC and Cap'n Web", () => {
 });
 
 // In production, workerd tags rejections from a reset DO with the structured flags
-// do-telemetry.ts reads. Locally, vitest-pool-workers aborts reject FLAGLESS — this test pins that, so if a
+// do-retry.ts reads. Locally, vitest-pool-workers aborts reject FLAGLESS — this test pins that, so if a
 // future pool upgrade starts attaching the production flags, it fails and the flag paths can
 // graduate from synthetic unit tests to real-reset integration tests. abortAllDurableObjects()
 // is the non-graceful teardown (deliberately not evictDurableObject(), which never breaks a
@@ -222,6 +230,23 @@ describe("workspace session across a user-DO-only reset", () => {
   });
 });
 
+// Smoke the paged action-log read against a real workspace DO: proves the @validateRpc wiring
+// accepts the option shape (the semantics live in __tests__/action-log-pagination.test.ts).
+// Runs after the reset tests so this session's DOs aren't torn down by abortAllDurableObjects().
+describe("paged action-log reads", () => {
+  it("answers listActions on a fresh workspace", async () => {
+    using publicApi = await connect();
+    const account = await createAccount(publicApi, "actionlog");
+    using authenticated = await publicApi.authenticate(account.token);
+    using workspace = await authenticated.newGadget();
+
+    expect(await workspace.listActions({ filter: "action" })).toEqual({ entries: [] });
+    // The pending filter is a distinct union member; this proves the regenerated validator
+    // accepts it end to end.
+    expect(await workspace.listActions({ filter: "pending" })).toEqual({ entries: [] });
+  });
+});
+
 describe("deployment-managed Ledger workspace", () => {
   it("protects the canonical gadget without freezing the whole workspace", async () => {
     using publicApi = await connect();
@@ -236,6 +261,7 @@ describe("deployment-managed Ledger workspace", () => {
     const overseerDo = exports.OverseerDurableObject.get(workspaceId);
     using workspace = await overseerDo.open(userId, account.username, () => {});
     const source = new Y.Doc();
+    source.getMap<Y.Text>().set("client.js", new Y.Text("export default function App() { return null; }"));
     await overseerDo.initializeFromBlueprint(
       Y.encodeStateAsUpdateV2(source),
       "Ledger",
@@ -281,17 +307,30 @@ describe("deployment-managed Ledger workspace", () => {
     const ledgerBundleBefore = await gadget.getUiBundle();
     using secondary = await workspace.createGadget("Secondary");
     const secondaryId = await secondary.getId();
-    const proposed = new Y.Doc();
-    const secondaryClient = new Y.Text();
-    secondaryClient.insert(0, "export default function App() { return 'secondary'; }");
-    proposed.getMap<Y.Text>(String(secondaryId)).set("client.js", secondaryClient);
-    const ledgerClient = new Y.Text();
-    ledgerClient.insert(0, "throw new Error('tampered');");
-    proposed.getMap<Y.Text>().set("client.js", ledgerClient);
-
     const chatId = await workspace.newChat("Edit secondary", null);
-    await workspace.updateCode(Y.encodeStateAsUpdateV2(proposed), chatId);
-    await workspace.mergeChanges(chatId, null, {includeDraft: true});
+    const summaries = new Map<number, WorkpieceSummary>();
+    const ready = Promise.withResolvers<void>();
+    using _subscription = await workspace.subscribeToWorkpieces(new class extends RpcTarget {
+      entry(summary: WorkpieceSummary) { summaries.set(summary.id, summary); }
+      removed(id: number) { summaries.delete(id); }
+      ready() { ready.resolve(); }
+      // This test runs its client in workerd; native stubs forward this Cap'n Web hook.
+      onRpcBroken() {}
+    }());
+    await ready.promise;
+    const secondaryHead = summaries.get(secondaryId);
+    if (secondaryHead?.type !== "gadget" || !secondaryHead.commitId) throw new Error("Secondary head missing");
+    const submission = {
+      clientId: "managed-boundary", seq: 1, generation: 0, revision: 0,
+      pins: [{gadgetId: secondaryId, baseCommit: secondaryHead.commitId}],
+      change: {[secondaryId]: [["client.js", {set: "export default function App() { return 'secondary'; }"}]]},
+    } satisfies Parameters<typeof workspace.submitCodeChange>[1];
+    expect((await rejection(workspace.submitCodeChange(chatId, {
+      ...submission,
+      change: {...submission.change, [metadata.defaultGadgetId!]: [["client.js", {set: "tampered"}]]},
+    }))).message).toBe(expected);
+    await workspace.submitCodeChange(chatId, submission);
+    await workspace.mergeChanges(chatId);
     expect((await secondary.getUiBundle())?.jsCode).toContain("secondary");
     expect(await gadget.getUiBundle()).toEqual(ledgerBundleBefore);
 
@@ -331,6 +370,7 @@ describe("deployment-managed Paths to Points holdings", () => {
     const overseerDo = exports.OverseerDurableObject.get(workspaceId);
     using workspace = await overseerDo.open(userId, account.username, () => {});
     const source = new Y.Doc();
+    source.getMap<Y.Text>().set("client.js", new Y.Text("export default function App() { return null; }"));
     await overseerDo.initializeFromBlueprint(
       Y.encodeStateAsUpdateV2(source),
       "Paths to Points",

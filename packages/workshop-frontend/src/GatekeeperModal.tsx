@@ -1,6 +1,6 @@
 import { logRpcFailure } from './rpcErrors'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Dialog, useKumoToastManager, type PortalContainer } from '@cloudflare/kumo'
+import { Dialog, useKumoToastManager } from '@cloudflare/kumo'
 import {
   CaretDown,
   CaretLeft,
@@ -35,6 +35,7 @@ import { matchesResourceUrl } from './resourceMatching'
 import { reportIssue } from './errorReporting'
 import { useSiteName } from './ServerConfigContext'
 import { AccountsSubscriberAdapter } from './accountsSubscriber'
+import { useDialogSelectPortalContainer } from './useDialogSelectPortalContainer'
 
 export interface GatekeeperModalProps {
   open: boolean
@@ -212,7 +213,7 @@ export default function GatekeeperModal({
   const footerRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const scrollContentRef = useRef<HTMLDivElement>(null)
-  const [selectPortalContainer, setSelectPortalContainer] = useState<PortalContainer>(null)
+  const selectPortalContainer = useDialogSelectPortalContainer()
 
   const [spawnerDisplayName, setSpawnerDisplayName] = useState('')
   const [spawnerModelId, setSpawnerModelId] = useState<string | null>(null)
@@ -227,18 +228,6 @@ export default function GatekeeperModal({
   const configuratorFrameRef = useRef<ConfiguratorFrameState | null>(null)
   const configuratorCollectResourceUrlRef = useRef<(() => Promise<string>) | null>(null)
   const nextConfiguratorFrameKeyRef = useRef(0)
-
-  useEffect(() => {
-    const el = document.createElement('div')
-    el.style.position = 'relative'
-    el.style.zIndex = '1100'
-    document.body.appendChild(el)
-    setSelectPortalContainer(el)
-    return () => {
-      setSelectPortalContainer(null)
-      el.remove()
-    }
-  }, [])
 
   const updateConfiguratorFrameState = (next: ConfiguratorFrameState | null) => {
     const previous = configuratorFrameRef.current
@@ -326,9 +315,10 @@ export default function GatekeeperModal({
         const scrollStyle = getComputedStyle(scroll)
         const scrollPadding = parseFloat(scrollStyle.paddingTop) + parseFloat(scrollStyle.paddingBottom)
         const requested = header + footer + scrollContent.getBoundingClientRect().height + scrollPadding
-        // Cap at the viewport-derived max-height so we don't push the dialog off-screen.
-        const top = Math.max(28, Math.min(96, window.innerHeight * 0.1))
-        const maxAvailable = (window.innerHeight - top - 28) * 0.9
+        // Cap at the visible viewport so the keyboard cannot push the configurator off-screen.
+        const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+        const top = Math.max(28, Math.min(96, viewportHeight * 0.1))
+        const maxAvailable = (viewportHeight - top - 28) * 0.9
         setDialogMinHeight(Math.ceil(Math.min(requested, maxAvailable)))
       })
     }
@@ -337,10 +327,12 @@ export default function GatekeeperModal({
     if (scrollContentRef.current) ro.observe(scrollContentRef.current)
     const onWindowResize = () => recompute()
     window.addEventListener('resize', onWindowResize)
+    window.visualViewport?.addEventListener('resize', onWindowResize)
     return () => {
       cancelAnimationFrame(frame)
       ro.disconnect()
       window.removeEventListener('resize', onWindowResize)
+      window.visualViewport?.removeEventListener('resize', onWindowResize)
     }
   }, [open, selectedConnectionId])
 
@@ -427,7 +419,10 @@ export default function GatekeeperModal({
         setAccounts(Array.from(accountMap.values()))
       },
     })
-    const subscription = authenticatedApi.subscribeConnectedAccounts(subscriber)
+    // A resource request must be able to select a deployment-forced ambient account. Such accounts
+    // stay hidden from the general Connectors management page because users cannot disconnect them.
+    const subscription = authenticatedApi.subscribeConnectedAccounts(
+      subscriber, { includeForcedAutoProvisionedAccounts: true })
     subscription.catch(error => {
       if (cancelled) return
       logRpcFailure('Failed to subscribe to connected accounts:', error)
@@ -594,9 +589,15 @@ export default function GatekeeperModal({
   const handleConnectAccount = async (vendorId: string, resourceUrlPatterns?: string[]) => {
     setConnectingVendor(vendorId)
     try {
-      const result = await authenticatedApi.connectAccount(vendorId, resourceUrlPatterns)
-      window.open(result.url, '_blank', 'noopener,noreferrer')
-      toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      const vendor = vendors.find(option => option.id.toLowerCase() === vendorId.toLowerCase())
+      if (vendor?.description.autoProvisionsAccount) {
+        await authenticatedApi.provisionAmbientAccount(vendorId)
+        toasts.add({ title: `${vendor.description.displayName} connected.`, variant: 'success' })
+      } else {
+        const result = await authenticatedApi.connectAccount(vendorId, resourceUrlPatterns)
+        window.open(result.url, '_blank', 'noopener,noreferrer')
+        toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      }
     } catch (error) {
       console.error('Failed to initiate connection:', error)
       reportIssue('gatekeeper.connect-start', error, { gatekeeperVendorId: vendorId })
@@ -786,7 +787,7 @@ export default function GatekeeperModal({
   return (
     <Dialog.Root open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <Dialog
-        className="!z-[1000] !top-[clamp(28px,10vh,96px)] !flex !max-h-[calc((100vh_-_clamp(28px,10vh,96px)_-_28px)_*_0.9)] !w-[min(760px,calc(100vw-32px))] !-translate-y-0 flex-col overflow-hidden bg-kumo-base p-0"
+        className="responsive-dialog !z-[1000] !top-[clamp(28px,10vh,96px)] !flex !max-h-[calc((100vh_-_clamp(28px,10vh,96px)_-_28px)_*_0.9)] !w-[min(760px,calc(100vw-32px))] !-translate-y-0 flex-col overflow-hidden bg-kumo-base p-0"
         style={dialogMinHeight > 0 ? { minHeight: `${dialogMinHeight}px` } : undefined}
         size="lg"
       >

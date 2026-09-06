@@ -28,7 +28,7 @@ import { verifyCfAccessJwt } from "./access.js";
 import { resolveUiFeatureFlags } from "./feature-flags";
 import { serveSiteLogo, SITE_LOGO_PATH } from "./site-logo.js";
 import { createWorkshopLogger } from "./observability";
-import { wrapDoStubForTelemetry } from "./do-telemetry";
+import { retryOnDoReset, wrapDoStubForTelemetry } from "./do-retry";
 
 const logger = createWorkshopLogger("workshop.server");
 
@@ -66,6 +66,7 @@ type Env = Cloudflare.Env & {
   // Set these if using Cloudflare Access for authentication, otherwise username/password is used.
   CF_ACCESS_AUD?: string,  // audience
   CF_ACCESS_ISS?: string,  // team URL, i.e. https://<team>.cloudflareaccess.com
+  MILESVAULT_AUTH?: string;
   DEV?: boolean;
   FLAGS?: Flagship;
 }
@@ -122,7 +123,8 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   whoami(): Promise<AiChatAuthorInfo> {
-    return this.#user.whoami();
+    // Pure-read delegations retry once across a user-DO reset (see retryOnDoReset); writes never do.
+    return retryOnDoReset(() => this.#user.whoami());
   }
   setOwnDisplayName(name: string): Promise<void> {
     return this.#user.setOwnDisplayName(name);
@@ -131,10 +133,10 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     return this.#user.changePassword(oldHash, newHash);
   }
   hasPasswordLogin(): Promise<boolean> {
-    return this.#user.hasPasswordLogin();
+    return retryOnDoReset(() => this.#user.hasPasswordLogin());
   }
   listModels(): Promise<AiChatAuthorInfo[]> {
-    return this.#user.listModels();
+    return retryOnDoReset(() => this.#user.listModels());
   }
   addModel(profile: AiChatAuthorInfo, config: AiModelConfig): Promise<void> {
     return this.#user.addModel(profile, config);
@@ -146,17 +148,17 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     return this.#user.setQuickModel(id);
   }
   getQuickModel(): Promise<null | string> {
-    return this.#user.getQuickModel();
+    return retryOnDoReset(() => this.#user.getQuickModel());
   }
 
   getPreferredModel(): Promise<string | null> {
-    return this.#user.getPreferredModel();
+    return retryOnDoReset(() => this.#user.getPreferredModel());
   }
   setPreferredModel(id: string | null): Promise<void> {
     return this.#user.setPreferredModel(id);
   }
   isOnboardingCompleted(): Promise<boolean> {
-    return this.#user.isOnboardingCompleted();
+    return retryOnDoReset(() => this.#user.isOnboardingCompleted());
   }
   completeOnboarding(): Promise<void> {
     return this.#user.completeOnboarding();
@@ -279,6 +281,12 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   async openGadget(id: string, shareKey?: string,
                    configureObservers?: RpcStub<ObserverConfigCallback>)
       : Promise<RpcStub<Overseer>> {
+    // The authenticated MilesVault identity already authorizes its native Ledger account. Finish
+    // provisioning before Overseer seeds ambient capabilities, so agents never have to ask the
+    // same signed-in user to connect MilesVault back to itself.
+    if (this.env.MILESVAULT_AUTH === "true") {
+      await this.#user.provisionAmbientAccount("ledger");
+    }
     // Paths to Points consumes the authenticated user's own balances. It is a deployment-owned
     // capability, not a generic account connection, so install or repair it before gadget code
     // can run. The DO returns without mutation when this is another output or a shared workspace.
@@ -314,10 +322,13 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   async listGadgets(): Promise<GadgetMetadataWithTimestamps[]> {
-    return this.#user.listGadgets();
+    return retryOnDoReset(() => this.#user.listGadgets());
   }
 
   async listOutputs(): Promise<ListOutputsResult> {
+    // Native deployments do not ship the MilesVault Ledger blueprint or account capability.
+    if (this.env.MILESVAULT_AUTH !== "true") return this.#user.listOutputs();
+
     // The API request boundary starts format installation in the background. Await the same
     // idempotent installer here before resolving the singleton, otherwise a user's first Outputs
     // visit can race the install, miss the Ledger blueprint, and stop polling with no Ledger.
@@ -359,7 +370,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   listGatekeeperVendors(filter?: GatekeeperVendorFilter): Promise<GatekeeperVendorInfo[]> {
-    return this.#user.listGatekeeperVendors(filter);
+    return retryOnDoReset(() => this.#user.listGatekeeperVendors(filter));
   }
 
   connectAccount(vendorId: string, resourceUrlPatterns?: string[]): Promise<{url: string}> {
@@ -371,7 +382,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   listAddableGatekeepers(): Promise<GatekeeperVendorInfo[]> {
-    return this.#user.listAddableGatekeepers();
+    return retryOnDoReset(() => this.#user.listAddableGatekeepers());
   }
 
   provisionAmbientAccount(vendorId: string): Promise<void> {
@@ -403,15 +414,15 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   async listOwnBlueprints(): Promise<BlueprintUserSummary[]> {
-    return this.#user.listBlueprints();
+    return retryOnDoReset(() => this.#user.listBlueprints());
   }
 
   async getOwnBlueprint(blueprintId: string): Promise<BlueprintUserSummary | null> {
-    return this.#user.getBlueprint(blueprintId);
+    return retryOnDoReset(() => this.#user.getBlueprint(blueprintId));
   }
 
   async listLibraryBlueprints(): Promise<BlueprintLibrarySummary[]> {
-    return this.#user.listLibraryBlueprints();
+    return retryOnDoReset(() => this.#user.listLibraryBlueprints());
   }
 
   async setBlueprintPinned(blueprintId: string, pinned: boolean): Promise<void> {
@@ -419,7 +430,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   async isBlueprintPinned(blueprintId: string): Promise<boolean> {
-    return this.#user.isBlueprintPinned(blueprintId);
+    return retryOnDoReset(() => this.#user.isBlueprintPinned(blueprintId));
   }
 
   async listFeaturedBlueprints(): Promise<BlueprintPublicInfo[]> {
@@ -436,7 +447,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   isBlueprintInLibrary(blueprintId: string): Promise<{ uploaded: boolean } | null> {
-    return this.#user.isBlueprintInLibrary(blueprintId);
+    return retryOnDoReset(() => this.#user.isBlueprintInLibrary(blueprintId));
   }
 
   async importBlueprint(archive: ReadableStream<Uint8Array>): Promise<string> {
@@ -706,6 +717,8 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
     this.users = this.ctx.exports.UserDurableObject;
   }
 
+  async ping(): Promise<void> {}
+
   async getServerConfig(): Promise<ServerConfig> {
     return getServerConfig(this.env);
   }
@@ -761,27 +774,33 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
     let email = this.accessPayload.email as string;
     let userId = this.users.idFromName(email);
-    let signupsEnabled = (await readAdminConfig(this.env)).signupsEnabled;
+    // MilesVault has already authenticated and entitled this identity before
+    // the private service-binding hop, so OS account materialization must not
+    // depend on the standalone Workshop signup toggle.
+    let signupsEnabled = this.env.MILESVAULT_AUTH === "true" ||
+        (await readAdminConfig(this.env)).signupsEnabled;
     let accountCreated =
         await this.users.get(userId).authenticateFromCfAccess(email, signupsEnabled);
     if (accountCreated) {
       recordAnalytics(this.ctx, this.env, {
         event_name: "account_created",
         user_id: userId.toString(),
-        source: "cf_access",
+        source: this.env.MILESVAULT_AUTH === "true" ? "milesvault" : "cf_access",
       });
     }
     recordAnalytics(this.ctx, this.env, {
       event_name: "user_authenticated",
       user_id: userId.toString(),
-      source: "cf_access",
+      source: this.env.MILESVAULT_AUTH === "true" ? "milesvault" : "cf_access",
     });
-    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession);
+    let externalIdentityKey = this.accessPayload.externalIdentityKey;
+    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession,
+        typeof externalIdentityKey === "string" ? externalIdentityKey : email);
   }
 
   async login(username: string, passwordHash: Uint8Array): Promise<string | null> {
-    if (this.env.CF_ACCESS_AUD) {
-      throw new Error("This deployment requires Cloudflare Access authentication.");
+    if (this.env.CF_ACCESS_AUD || this.env.MILESVAULT_AUTH === "true") {
+      throw new Error("This deployment requires external authentication.");
     }
     if (!isPasswordAuthEnabled(this.env)) {
       throw new Error("Password login is disabled on this deployment. Use a sign-in option.");
@@ -804,8 +823,8 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
   async createAccount(username: string, displayName: string, passwordHash: Uint8Array)
       : Promise<string | null> {
-    if (this.env.CF_ACCESS_AUD) {
-      throw new Error("This deployment requires Cloudflare Access authentication.");
+    if (this.env.CF_ACCESS_AUD || this.env.MILESVAULT_AUTH === "true") {
+      throw new Error("This deployment requires external authentication.");
     }
     if (!isPasswordAuthEnabled(this.env)) {
       throw new Error("Password signup is disabled on this deployment. Use a sign-in option.");
@@ -900,19 +919,29 @@ export default {
 
       let accessPayload: JWTPayload | undefined;
 
-      if (env.CF_ACCESS_AUD) {
+      if (env.CF_ACCESS_AUD || env.MILESVAULT_AUTH === "true") {
         if (req.headers.get("Origin") !== url.origin) {
           return new Response("Cross-origin API access not allowed.", { status: 403 });
         }
 
-        const payload = await verifyCfAccessJwt(req, env);
-        if (!payload) return new Response("Invalid CF access JWT.", { status: 403 });
+        if (env.MILESVAULT_AUTH === "true") {
+          const ledgerKey = req.headers.get("x-milesvault-user")?.trim();
+          if (!ledgerKey || ledgerKey.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(ledgerKey)) {
+            return new Response("Missing trusted MilesVault identity.", { status: 403 });
+          }
+          // OS keeps a normalized account identity; the existing MilesVault Durable Object key
+          // remains exact and case-sensitive, and is carried separately to the Ledger output.
+          accessPayload = { email: ledgerKey.toLowerCase(), externalIdentityKey: ledgerKey };
+        } else {
+          const payload = await verifyCfAccessJwt(req, env);
+          if (!payload) return new Response("Invalid CF access JWT.", { status: 403 });
 
-        if (!payload.email) {
-          return new Response("Access JWT didn't specify email address.", { status: 403 });
+          if (!payload.email) {
+            return new Response("Access JWT didn't specify email address.", { status: 403 });
+          }
+
+          accessPayload = payload;
         }
-
-        accessPayload = payload;
       }
 
       // HACK: Implement `abortSession` callback by closing the websocket.

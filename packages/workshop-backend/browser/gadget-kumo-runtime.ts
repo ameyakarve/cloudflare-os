@@ -6,9 +6,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import {
   bracketMatching,
   foldKeymap,
-  HighlightStyle,
   indentOnInput,
-  syntaxHighlighting,
 } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { searchKeymap } from "@codemirror/search";
@@ -22,12 +20,14 @@ import {
   lineNumbers,
   rectangularSelection,
 } from "@codemirror/view";
-import { tags } from "@lezer/highlight";
 import {
   beancountCompletion,
-  beancountLanguage,
   type BeancountCompletionData,
 } from "./beancount-completion.js";
+import {
+  beancountLanguage,
+  beancountThemeExtensions,
+} from "@gadgets/workshop-shared/beancount-editor";
 import {
   Badge,
   Banner,
@@ -76,123 +76,6 @@ runtimeGlobal.Kumo = Object.freeze({
   cn,
 });
 runtimeGlobal.kumo = runtimeGlobal.Kumo;
-
-// Reuse the Context library's established CodeMirror treatment. Only the Beancount token mapping is
-// MilesVault-specific; editor chrome, spacing, scrolling, selection and theme colors stay OS-native.
-const monoFont =
-  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
-
-const beancountHighlightLight = HighlightStyle.define([
-  { tag: tags.literal, color: "#3a72c9" },
-  { tag: tags.operator, color: "#6b6157", fontWeight: "700" },
-  { tag: tags.string, color: "#4d8a44" },
-  { tag: tags.variableName, color: "#1f1d1a" },
-  { tag: tags.number, color: "#b56a1f", fontWeight: "700" },
-  { tag: tags.unit, color: "#3a72c9" },
-  { tag: tags.keyword, color: "#8e3aa6", fontWeight: "700" },
-]);
-
-const beancountHighlightDark = HighlightStyle.define([
-  { tag: tags.literal, color: "#93c5fd" },
-  { tag: tags.operator, color: "#b9b5c8", fontWeight: "700" },
-  { tag: tags.string, color: "#86efac" },
-  { tag: tags.variableName, color: "#e8e6f0" },
-  { tag: tags.number, color: "#fbbf24", fontWeight: "700" },
-  { tag: tags.unit, color: "#93c5fd" },
-  { tag: tags.keyword, color: "#d8b4fe", fontWeight: "700" },
-]);
-
-const beancountThemeLight = EditorView.theme({
-  "&": { color: "#1f1d1a", backgroundColor: "transparent", height: "100%", fontSize: "13px" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-scroller": {
-    fontFamily: monoFont,
-    lineHeight: "1.7",
-    overflow: "auto",
-    overscrollBehavior: "contain",
-    scrollbarWidth: "thin",
-    scrollbarColor: "var(--color-kumo-line) transparent",
-  },
-  ".cm-scroller::-webkit-scrollbar": { width: "4px", height: "4px" },
-  ".cm-scroller::-webkit-scrollbar-thumb": {
-    background: "var(--color-kumo-line)",
-    borderRadius: "4px",
-  },
-  ".cm-scroller::-webkit-scrollbar-track": { background: "transparent" },
-  ".cm-content": { padding: "12px 0", caretColor: "#1f1d1a" },
-  ".cm-line": { padding: "0 16px" },
-  ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "#bdb7ae", fontSize: "12px" },
-  ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 14px", minWidth: "28px" },
-  ".cm-activeLine": { backgroundColor: "var(--color-kumo-fill)" },
-  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "#6b6157" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#1f1d1a" },
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-    backgroundColor: "#b3d4ff",
-  },
-  ".cm-tooltip": {
-    backgroundColor: "var(--color-kumo-overlay)",
-    border: "1px solid var(--color-kumo-line)",
-    color: "#1f1d1a",
-    borderRadius: "8px",
-    overflow: "hidden",
-  },
-  ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: monoFont, fontSize: "12px" },
-  ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
-    backgroundColor: "var(--color-kumo-fill)",
-    color: "#1f1d1a",
-  },
-  ".cm-completionDetail": { color: "#6b6157", fontStyle: "normal" },
-  ".cm-completionMatchedText": { color: "#3a72c9", fontWeight: "700", textDecoration: "none" },
-  ".cm-search": { backgroundColor: "var(--color-kumo-overlay)", color: "#1f1d1a" },
-}, { dark: false });
-
-const beancountThemeDark = EditorView.theme({
-  "&": { color: "#e8e6f0", backgroundColor: "transparent", height: "100%", fontSize: "13px" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-scroller": {
-    fontFamily: monoFont,
-    lineHeight: "1.7",
-    overflow: "auto",
-    overscrollBehavior: "contain",
-    scrollbarWidth: "thin",
-    scrollbarColor: "var(--color-kumo-line) transparent",
-  },
-  ".cm-scroller::-webkit-scrollbar": { width: "4px", height: "4px" },
-  ".cm-scroller::-webkit-scrollbar-thumb": {
-    background: "var(--color-kumo-line)",
-    borderRadius: "4px",
-  },
-  ".cm-scroller::-webkit-scrollbar-track": { background: "transparent" },
-  ".cm-content": { padding: "12px 0", caretColor: "#e8e6f0" },
-  ".cm-line": { padding: "0 16px" },
-  ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "#6d6880", fontSize: "12px" },
-  ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 14px", minWidth: "28px" },
-  ".cm-activeLine": { backgroundColor: "var(--color-kumo-fill)" },
-  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "#b9b5c8" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#e8e6f0" },
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-    backgroundColor: "#4b3d66",
-  },
-  ".cm-tooltip": {
-    backgroundColor: "var(--color-kumo-overlay)",
-    border: "1px solid var(--color-kumo-line)",
-    color: "#e8e6f0",
-    borderRadius: "8px",
-    overflow: "hidden",
-  },
-  ".cm-tooltip.cm-tooltip-autocomplete > ul": { fontFamily: monoFont, fontSize: "12px" },
-  ".cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected]": {
-    backgroundColor: "var(--color-kumo-fill)",
-    color: "#e8e6f0",
-  },
-  ".cm-completionDetail": { color: "#b9b5c8", fontStyle: "normal" },
-  ".cm-completionMatchedText": { color: "#93c5fd", fontWeight: "700", textDecoration: "none" },
-  ".cm-search": { backgroundColor: "var(--color-kumo-overlay)", color: "#e8e6f0" },
-}, { dark: true });
-
-const beancountThemeExtensions = (mode: "light" | "dark") => mode === "dark"
-  ? [syntaxHighlighting(beancountHighlightDark), beancountThemeDark]
-  : [syntaxHighlighting(beancountHighlightLight), beancountThemeLight];
 
 type BeancountEditorProps = {
   value: string;

@@ -4,6 +4,8 @@ import { PublicApi, AuthenticatedApi } from '@gadgets/workshop-shared/api'
 import { setReportedUserId } from './errorReporting'
 
 const CF_ACCESS_MODE = import.meta.env.VITE_CF_ACCESS_MODE === 'true'
+const MILESVAULT_AUTH_MODE = import.meta.env.VITE_MILESVAULT_AUTH_MODE === 'true'
+const EXTERNAL_AUTH_MODE = CF_ACCESS_MODE || MILESVAULT_AUTH_MODE
 
 interface AuthState {
   token: string | null
@@ -12,7 +14,7 @@ interface AuthState {
   error: string | null
 }
 
-export { CF_ACCESS_MODE }
+export { CF_ACCESS_MODE, MILESVAULT_AUTH_MODE, EXTERNAL_AUTH_MODE }
 
 export function useAuth(publicApi: RpcStub<PublicApi>) {
   const [authState, setAuthState] = useState<AuthState>({
@@ -56,7 +58,7 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
   }, [authState.authenticatedApi])
 
   useEffect(() => {
-    if (CF_ACCESS_MODE) {
+    if (EXTERNAL_AUTH_MODE) {
       authenticateWithCfAccess()
     } else {
       const storedToken = localStorage.getItem('authToken')
@@ -124,6 +126,11 @@ export function useAuth(publicApi: RpcStub<PublicApi>) {
 
   const logout = () => {
     setReportedUserId(undefined)
+
+    if (MILESVAULT_AUTH_MODE) {
+      window.location.assign('/api/auth/signout')
+      return
+    }
 
     if (CF_ACCESS_MODE) {
       window.location.assign('/cdn-cgi/access/logout')

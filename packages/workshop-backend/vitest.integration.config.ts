@@ -8,6 +8,7 @@ const EXPECTED_OPEN_ERROR_CODES = new Set([
 ]);
 
 export default defineConfig({
+  resolve: { dedupe: ['@codemirror/state', '@codemirror/view', '@codemirror/language', '@lezer/common', '@lezer/highlight', '@lezer/lr'] },
   esbuild: {
     target: "es2022",
   },
@@ -24,7 +25,7 @@ export default defineConfig({
   test: {
     include: ["__integration__/*.test.ts"],
     // Asserts the pool actually started, rather than trusting a green run to mean workerd.
-    setupFiles: ["../../scripts/assert-workerd.ts"],
+    setupFiles: ["@gadgets/scripts/assert-workerd"],
     // Whichever test runs first pays for workerd booting and instantiating the whole backend
     // bundle -- ~6s on a dev machine and roughly 3x that on a CI runner, while every subsequent
     // test in the file finishes in tens of milliseconds. The timeout has to clear that cold

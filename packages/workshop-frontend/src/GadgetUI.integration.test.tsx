@@ -202,6 +202,21 @@ describe('GadgetUI RPC recovery', () => {
     expect(postMessage).toHaveBeenCalledWith({ type: 'gadget-theme', mode: 'dark' }, '*')
   })
 
+  it('gives every gadget a mobile viewport', async () => {
+    const gadget = fakeGadget('mobile', 'document.body.textContent = "mobile"')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    const srcdoc = container.querySelector('iframe')!.srcdoc
+    expect(srcdoc).toContain(
+      '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    )
+    expect(srcdoc).not.toContain('touch-action')
+    expect(container.querySelector('iframe')?.style.getPropertyValue('touch-action')).toBe('')
+  })
+
   it('notifies the mounted gadget when external data may have changed', async () => {
     const gadget = fakeGadget('ledger', 'document.body.textContent = "ledger"')
     await act(async () => {
@@ -529,4 +544,16 @@ describe('GadgetUI RPC recovery', () => {
     const reloadedChild = connectIframe(container.querySelector('iframe')!)
     await expect(reloadedChild.read()).resolves.toBe('reloaded')
   })
+  it('lays out gadget UI against the device-width viewport', async () => {
+    const gadget = fakeGadget('responsive', 'document.body.textContent = "responsive"')
+    await act(async () => {
+      root.render(<GadgetUI gadget={gadget.stub} height="100px" />)
+    })
+
+    await vi.waitFor(() => expect(container.querySelector('iframe')).not.toBeNull())
+    expect(container.querySelector('iframe')!.srcdoc).toContain(
+      '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    )
+  })
+
 })

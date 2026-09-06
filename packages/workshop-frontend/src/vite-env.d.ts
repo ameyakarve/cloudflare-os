@@ -8,6 +8,9 @@ interface ImportMetaEnv {
   // In this mode, password-based login/signup is disabled and the app authenticates
   // via the CF Access JWT that Access injects into requests before they reach the server.
   readonly VITE_CF_ACCESS_MODE?: string;
+
+  // Set to "true" when an authenticated MilesVault Worker forwards requests.
+  readonly VITE_MILESVAULT_AUTH_MODE?: string;
 }
 
 interface ImportMeta {

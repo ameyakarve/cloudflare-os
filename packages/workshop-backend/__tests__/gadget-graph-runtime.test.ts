@@ -1,3 +1,4 @@
+import runtimeSource from "../src/generated/gadget-graph-runtime.txt";
 import { describe, expect, it } from "vitest";
 import "../browser/gadget-graph-runtime";
 import { withGadgetKumo } from "../src/gadget-kumo";
@@ -33,8 +34,8 @@ describe("GadgetGraph", () => {
 
   it("injects Dagre only for clients that use it", () => {
     expect(withGadgetKumo("GadgetGraph.layoutDirected({ nodes: [], edges: [] })"))
-      .toContain("/src/generated/gadget-graph-runtime.txt");
+      .toContain(runtimeSource);
     expect(withGadgetKumo("GadgetUI.mount(null)"))
-      .not.toContain("/src/generated/gadget-graph-runtime.txt");
+      .not.toContain(runtimeSource);
   });
 });
