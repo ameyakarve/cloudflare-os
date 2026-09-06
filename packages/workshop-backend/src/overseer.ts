@@ -1,3 +1,5 @@
+import { deploymentAccessEnabled, DeploymentAccessError, watchDeploymentAccess } from "./deployment-access.js";
+import type { DeploymentAccessGrant } from "@gadgets/workshop-shared/deployment-access";
 import { RpcCompatible, RpcStub, RpcTarget } from "capnweb";
 import { validateRpc } from "capnweb-validate";
 import { Overseer, GadgetMetadata, UiBundle, WorkpieceId, WorkpieceSummary, WorkpiecesSubscriber, GadgetClient, GadgetBindingInfo, GatekeeperClient, ActionState, ActionLogEntry, ActionsSubscriber, ActionHistoryFilter, ActionHistoryPage, ChatGadgetPin, ChatCodeBase, ChatGadgetPinState, CodeChangeSubmission, CommitIdentity, CommitInfo, MergeChangesResult, AiChatMetadata, AiChatMessage, AiChatHistoryPage, AiChatSubscriber, AiChatAuthorInfo, AiModelConfig, AiChatMessageBody, AgentSpawnerConfig, ConsoleLogSubscriber, ConsoleLogEvent, CapsuleSpecifier, CollaboratorInfo, CollaboratorRole, AffectedCollaborator, ShareLinkInfo, GatekeeperCreationSpec, ObserverConfigCallback, ObserverBindingNeed, ObserverBindingFailure, BlueprintBindingAnnotation, BlueprintBinding, BlueprintMetadata, BlueprintOutput, MessageFormatRef, isOutputIcon, SpawnerEnvTarget, BlueprintGadgetSummary, AiChatStreamEvent, BlueprintScreenshotUpload, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ChatAttachmentUpload, ChatAttachmentHandle, ChatAttachmentRef, BoundHookInfo, PreApprovableAction, PresenceParticipant, PresenceSubscriber, SlashCommandChoice, SlashCommandRequest, validateBindingName, createOpenGadgetError, OPEN_GADGET_ERROR_CODES, resolveSiteName, actionChangeTime } from '@gadgets/workshop-shared/api';
@@ -2138,6 +2140,19 @@ class OverseerImpl implements AgentHooks {
       this.#liveChats.set(chatId, ctx);
     }
     return ctx;
+  }
+
+  /** Check workspace ownership and, for an agent turn, its authenticated initiating user. */
+  async checkDeploymentAccess(initiator?: AiChatAuthorInfo): Promise<DeploymentAccessGrant | undefined> {
+    if (!deploymentAccessEnabled(this.env)) return undefined;
+    if (!this.ownerId) throw new DeploymentAccessError();
+    const ids = new Set([this.ownerId]);
+    if (initiator && initiator.type !== "agent") ids.add(this.users.idFromName(initiator.id).toString());
+    const grants = await Promise.all([...ids].map(id =>
+        this.users.get(this.users.idFromString(id)).getDeploymentAccessGrant()))
+        .catch(() => { throw new DeploymentAccessError(); });
+    if (grants.some(grant => !grant || grant.validUntil <= Date.now())) throw new DeploymentAccessError();
+    return { allowed: true, validUntil: Math.min(...grants.map(grant => grant!.validUntil)) };
   }
 
   // Forcefully tear down all live state for a chat (e.g. on deletion).
@@ -5726,6 +5741,7 @@ class OverseerImpl implements AgentHooks {
   // was applied automatically. For an auto-approval, `resolvedBy` is the user who enabled the rule.
   async applyPendingAction(record: ActionRecord & {type: "action"},
                            resolvedBy: AiChatAuthorInfo, autoApproved: boolean): Promise<void> {
+    await this.checkDeploymentAccess(resolvedBy);
     let gatekeeper = this.getGatekeeperFacet(record.gatekeeperId);
     // The apply-time cache stub is scoped to the gatekeeper AND to this action (approval can
     // happen long after the session that queued it, so the queue-time stub is gone) -- the
@@ -5998,6 +6014,7 @@ class OverseerImpl implements AgentHooks {
 
   async authorizeObservation(gatekeeperId: number, description: ObservationDescription,
                              caller: GatekeeperCaller): Promise<void> {
+    await this.checkDeploymentAccess();
     if (description.prohibitAllSharing) {
       if ((await this.getSharingManager()).hasAnyShares()) {
         throw new Error(
@@ -6271,6 +6288,7 @@ class OverseerImpl implements AgentHooks {
   async submitAction(gatekeeperId: number, action: number,
                      description: ActionDescription, caller: GatekeeperCaller)
       : Promise<void> {
+    await this.checkDeploymentAccess();
     let gatekeeper = this.storage.gatekeepers.get(gatekeeperId);
     if (this.storage.prohibitAllSharing.get() &&
         !allowActionInPrivateLedgerWorkspace(gatekeeper)) {
@@ -7472,7 +7490,14 @@ class OverseerImpl implements AgentHooks {
       event: "agent.run.started", callbackInitiated,
     });
 
+    let accessWatch: Disposable | undefined;
     try {
+      if (deploymentAccessEnabled(this.env)) {
+        accessWatch = await watchDeploymentAccess(
+            () => this.checkDeploymentAccess(initiator),
+            error => liveChat.cancelController.abort(error));
+      }
+
       // Reap any provisional gadgets orphaned by a crashed prior turn before snapshotting
       // history: replay must not see registry records the chat log doesn't back (an unstamped
       // record's creating step never reached its barrier, so the log holds no trace of it; see
@@ -7606,7 +7631,7 @@ class OverseerImpl implements AgentHooks {
       // Report unexpected failures for triage. Skip expected provider 4xx (auth,
       // rate limit, quota/billing), which are ordinary control flow, not incidents.
       const apiStatus = apiError?.statusCode;
-      if (apiStatus === undefined || apiStatus >= 500) {
+      if (!(err instanceof DeploymentAccessError) && (apiStatus === undefined || apiStatus >= 500)) {
         reportIssue("overseer.run-agent", err, {
           attributes: obsContext.get(),
           http: apiStatus === undefined
@@ -7639,6 +7664,7 @@ class OverseerImpl implements AgentHooks {
       }
       liveChat.activeAgentCallbacks.clear();
     } finally {
+      accessWatch?.[Symbol.dispose]();
       // If this turn billed the user's own Cloudflare account, refresh their cached balance now (in
       // the background) so the next turn's billing decision reflects the spend just incurred. Runs
       // on both the success and error paths — an "insufficient funds" failure is exactly when an
@@ -10785,6 +10811,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   async startHook(hookId: number): Promise<{
     callback: NativeRpcStub<RpcTarget>, approvalQueue: ApprovalQueue
   }> {
+    await this.impl.checkDeploymentAccess();
     let record = requireLiveHook(this.impl, hookId);
 
     let vendorId = record.vendorId ??
@@ -13591,6 +13618,7 @@ function makeHookFiringCallback(impl: OverseerImpl, hookId: number): NativeRpcSt
     // escaping into the RPC machinery that invokes the function (workerd reports that as
     // uncaught, too).
     async apply(_target, _thisArg, args: unknown[]) {
+      await impl.checkDeploymentAccess();
       let record = requireLiveHook(impl, hookId);
       return Reflect.apply(record.callback as any, undefined, args);
     },
@@ -13600,6 +13628,7 @@ function makeHookFiringCallback(impl: OverseerImpl, hookId: number): NativeRpcSt
       // dispositions as getGadgetFacet's proxy over the gadget facet.
       if (typeof prop === "symbol" || prop === "then") return undefined;
       return async (...args: unknown[]) => {
+        await impl.checkDeploymentAccess();
         let record = requireLiveHook(impl, hookId);
         return Reflect.apply((record.callback as any)[prop], record.callback, args);
       };
@@ -13637,9 +13666,10 @@ class ApprovalQueueImpl extends RpcTarget implements ApprovalQueue {
     return this.impl.submitAction(this.gatekeeperId, action, description, this.caller);
   }
 
-  bindHook<Hook extends RpcTarget>(
+  async bindHook<Hook extends RpcTarget>(
         controller: Fetcher<HookController<Hook>>, callback: NativeRpcStub<Hook>,
         description: HookDescription): Promise<void> {
+    await this.impl.checkDeploymentAccess();
     if (this.hookId !== undefined) requireLiveHook(this.impl, this.hookId);
     return this.impl.bindHook(this.gatekeeperId, controller, callback, description, this.caller);
   }

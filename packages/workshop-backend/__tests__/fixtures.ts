@@ -81,6 +81,7 @@ export async function openFakeOverseer(
     open: OverseerDurableObject.prototype.open,
     env: {},
     impl: {
+      checkDeploymentAccess: async () => undefined,
       ownerId,
       assertWorkspaceMutable: () => {},
       assertGatekeeperUsable: () => {},

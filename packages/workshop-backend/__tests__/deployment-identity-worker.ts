@@ -2,6 +2,23 @@ export { default } from '../src/server.js';
 export * from '../src/server.js';
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import type { DeploymentIdentity } from '@gadgets/workshop-shared/gatekeeper';
+import type { DeploymentAccessDecision } from '@gadgets/workshop-shared/deployment-access';
+
+/** Native private-policy fixture with an exact-key guard and short test grants. */
+export class IdentityTestAccessPolicy extends WorkerEntrypoint<Cloudflare.Env, {key: string; allowed: boolean}> {
+  checkAccess(key: string): DeploymentAccessDecision {
+    return key === this.ctx.props.key && this.ctx.props.allowed
+      ? {allowed: true, validUntil: Date.now() + 100}
+      : {allowed: false, reason: 'denied'};
+  }
+}
+
+/** Persistable hook fixture: no external side effects. */
+export class IdentityTestHook extends WorkerEntrypoint<Cloudflare.Env> {
+  async enable() {}
+  async disable() {}
+  deliver() { return 'delivered'; }
+}
 
 /** Persistent fixture account: exercises real capability serialization in User DO storage. */
 export class IdentityTestAccount extends WorkerEntrypoint<Cloudflare.Env, DeploymentIdentity> {

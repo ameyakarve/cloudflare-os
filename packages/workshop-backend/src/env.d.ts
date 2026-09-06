@@ -60,6 +60,9 @@ declare global {
       // Cloudflare Access (SSO). (Also referenced via a local Env extension in server.ts.)
       CF_ACCESS_AUD?: string;   // audience
       MILESVAULT_AUTH?: string;
+      // Private deployment policy. Required deployments fail closed if the binding is missing.
+      DEPLOYMENT_ACCESS_POLICY?: Service<import("@gadgets/workshop-shared/deployment-access").DeploymentAccessPolicy>;
+      DEPLOYMENT_ACCESS_REQUIRED?: string;
       CF_ACCESS_ISS?: string;   // team URL, e.g. https://<team>.cloudflareaccess.com
 
       // Comma-separated allowlist of gatekeeper vendor ids permitted to drive sign-in (e.g.
