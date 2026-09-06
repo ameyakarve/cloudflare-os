@@ -5422,6 +5422,9 @@ class OverseerImpl implements AgentHooks {
   getGadgetFacetFetcher(gadgetId: WorkpieceId, chatId?: number): Fetcher<DurableObject> {
     let gadget = this.getGadgetRecord(gadgetId);
     if (gadget.systemOutput) chatId = undefined;
+    // A direct RPC preview must see the same persisted draft as the UI/export paths. Materialize
+    // before snapshotting the loader's sequence; callers need not fetch a UI bundle first.
+    this.checkChatExistsAndMaterializeChanges(chatId);
 
     if (chatId !== undefined) {
       // Check if the requested chat proposes changes to *this gadget* (code, provisional

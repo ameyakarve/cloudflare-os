@@ -1520,3 +1520,37 @@ describe("proposed-changes derivation", () => {
     expect(deliveredLists.at(-1)).toBeUndefined();
   }));
 });
+
+
+describe("direct Gadget draft previews", () => {
+  it.each([0, 7])("loads proposed modules without first fetching a UI bundle (chat %s)", chatId => withImpl(async impl => {
+    const before = {"server.js": "export class Gadget { version() { return 'old'; } }", "client.js": "old client"};
+    const head = await commitFiles(impl, before);
+    addGadget(impl, 3, "APP", head);
+    addChat(impl, chatId);
+    await submit(impl, chatId, {generation: 0, revision: 0, clientId: "direct-preview", seq: 1,
+      pins: [{gadgetId: 3, baseCommit: head}], change: {3: [["server.js", {set: "export class Gadget { version() { return 'new'; } }"}]]},
+    });
+    expect(liveRows(impl, chatId)).toHaveLength(1);
+    let definition: Promise<{modules: Record<string, string>}> | undefined;
+    const oldLoader = impl.env.LOADER;
+    // Capture the actual loader definition. The native facet uses an inert fixture class so
+    // this test needs no dynamically uploaded Worker, network or generated app bundle.
+    impl.env.LOADER = {get: (_name: string, build: () => Promise<{modules: Record<string, string>}>) => {
+      definition = build();
+      return {getDurableObjectClass: () => impl.ctx.exports.IdentityTestGatekeeper({
+        props: {subject: "fixture@example.com", storageKey: "fixture@example.com"},
+      })};
+    }};
+    try {
+      const facet = impl.getGadgetFacetFetcher(3, chatId);
+      await facet.getStorageKey();
+      expect((await definition)?.modules).toMatchObject({
+        "server.js": "export class Gadget { version() { return 'new'; } }", "client.js": "old client",
+      });
+      expect(liveRows(impl, chatId)).toEqual([]);
+      expect(chatMessages(impl, chatId).filter(message => message.type === "changes")).toHaveLength(1);
+      expect(impl.getGadgetRecord(3).commitId).toBe(head);
+    } finally { impl.env.LOADER = oldLoader; }
+  }));
+});
