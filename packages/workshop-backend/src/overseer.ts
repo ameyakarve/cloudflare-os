@@ -743,8 +743,7 @@ export type GadgetRecord = {
    */
   output?: BlueprintOutput;
 
-  // Trusted deployment marker, set only by AuthenticatedApi while instantiating a bundled system
-  // output. Unlike `output`, this is authority-bearing and can never come from blueprint metadata.
+  /** Trusted deployment authority set during bundled system-output installation, never from blueprint metadata. */
   systemOutput?: "ledger";
 
   /**
@@ -2695,7 +2694,7 @@ class OverseerImpl implements AgentHooks {
                  record.pending.chatId !== forChatId) {
         throw new Error(`No such gadget: ${id}`);
       }
-      if (forMutation && record.systemOutput) {
+      if (forMutation && record?.type === "gadget" && record.systemOutput) {
         throw new Error(MANAGED_SYSTEM_OUTPUT_ERROR_MESSAGE);
       }
     }
@@ -3709,6 +3708,7 @@ class OverseerImpl implements AgentHooks {
                        change: CodeChange,
                        newPins: ChatGadgetPinState[], contentAfter: CodeContent | undefined,
                        submission?: {clientId: string, seq: number}): ChatChangeRecord {
+    for (let id of Object.keys(change)) this.assertGadgetMutable(Number(id));
     let codeBase = this.chatCodeBase(meta);
     codeBase.pins.push(...newPins);
     let revision = codeBase.revision + 1;
@@ -3827,52 +3827,6 @@ class OverseerImpl implements AgentHooks {
     let declared = this.declaredPinGadgets(chatId);
     return pins.filter(pin => !declared.has(pin.gadgetId))
         .map(pin => ({gadgetId: pin.gadgetId, baseCommit: pin.baseCommit}));
-  }
-
-  // A system output protects one gadget, not every gadget sharing its workspace. Rebuild an
-  // incoming update from the final contents of mutable gadget roots so edits to the canonical
-  // Ledger root are dropped while changes to ordinary gadgets remain mergeable.
-  filterManagedGadgetCodeUpdate(update: Uint8Array): Uint8Array | undefined {
-    let records = Array.from(this.storage.gadgets.list());
-    if (!records.some(record => record.systemOutput)) return update;
-
-    let {ydoc: filtered} = this.buildYDoc("current");
-    let proposed = new Y.Doc();
-    Y.applyUpdateV2(proposed, Y.encodeStateAsUpdateV2(filtered));
-    Y.applyUpdateV2(proposed, update);
-    let before = Y.encodeStateVector(filtered);
-    let changed = false;
-
-    filtered.transact(() => {
-      for (let record of records) {
-        if (record.systemOutput) continue;
-        let rootName = this.gadgetRootName(record.id);
-        let target = filtered.getMap<Y.Text>(rootName);
-        let source = proposed.getMap<Y.Text>(rootName);
-
-        for (let name of Array.from(target.keys())) {
-          if (!source.has(name)) {
-            target.delete(name);
-            changed = true;
-          }
-        }
-        for (let [name, sourceText] of source) {
-          let content = sourceText.toString();
-          let targetText = target.get(name);
-          if (targetText?.toString() === content) continue;
-          if (!targetText) {
-            targetText = new Y.Text();
-            target.set(name, targetText);
-          } else if (targetText.length > 0) {
-            targetText.delete(0, targetText.length);
-          }
-          if (content) targetText.insert(0, content);
-          changed = true;
-        }
-      }
-    });
-
-    return changed ? Y.encodeStateAsUpdateV2(filtered, before) : undefined;
   }
 
   makeBindingLoopback(target: BindingLoopbackTarget, caller: GatekeeperCaller) {
@@ -4291,6 +4245,7 @@ class OverseerImpl implements AgentHooks {
       : Promise<{generation: number, revision: number}> {
     this.getChatMetaOrThrow(chatId);  // fail fast
     this.#validateSubmissionShape(submission);
+    for (let id of Object.keys(submission.change)) this.assertGadgetMutable(Number(id));
     let digest = await submissionDigest(submission);
 
     // Dedupe by (user, clientId, seq) before anything that can reject the base: a retry of an
@@ -4832,6 +4787,8 @@ class OverseerImpl implements AgentHooks {
         // their content by re-pinning -- see the re-pin plan below.
         continue;
       }
+      // Legacy drafts may contain managed code; accepting a chat must never publish it.
+      if (record.systemOutput) continue;
       if (record.pending &&
           (record.pending.chatId !== chatId || record.pending.sequence === undefined ||
            record.pending.sequence > mergeThrough || revertedStamp(record.pending))) {
@@ -4979,10 +4936,11 @@ class OverseerImpl implements AgentHooks {
     for (let gadget of this.storage.gadgets.list()) {
       if (gadget.type !== "gadget") continue;  // worktrees have no binding edges
       let promoted = false;
-      for (let edge of Object.values(gadget.bindings)) {
+      for (let [name, edge] of Object.entries(gadget.bindings)) {
         if (edge.pending?.chatId === chatId && edge.pending.sequence !== undefined &&
             edge.pending.sequence <= mergeThrough && !revertedStamp(edge.pending)) {
-          delete edge.pending;
+          if (gadget.systemOutput) delete gadget.bindings[name];
+          else delete edge.pending;
           promoted = true;
         }
       }
@@ -5582,7 +5540,7 @@ class OverseerImpl implements AgentHooks {
    * Durable Object as before. The managed Ledger receives a platform-owned UI session instead,
    * so its explicit human Save path never has to be exposed as an agent-callable Gadget method.
    */
-  async getGadgetUiSession(gadgetId: WorkpieceId, chatId?: number, joinedAs?: string): Promise<RpcStub<any>> {
+  async getGadgetUiSession(gadgetId: WorkpieceId, chatId?: number, joinedAs?: SessionKind): Promise<RpcStub<any>> {
     let gadget = this.getGadgetRecord(gadgetId);
     if (gadget.systemOutput !== "ledger") return this.getGadgetFacet(gadgetId, chatId, joinedAs);
 
@@ -8266,7 +8224,7 @@ class OverseerImpl implements AgentHooks {
     // binding would correctly disappear but the same conversation would have no write path until
     // the user opened a new chat.
     let hasManagedLedger = [...this.storage.gadgets.list()]
-        .some(gadget => gadget.systemOutput === "ledger");
+        .some(gadget => gadget.type === "gadget" && gadget.systemOutput === "ledger");
     if (hasManagedLedger) {
       for (let [name, target] of Object.entries(seedMap)) {
         let gatekeeper = this.storage.gatekeepers.get(target);
@@ -10315,7 +10273,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       throw new TypeError("Invalid MilesVault ledger key.");
     }
     let ledgerGadgets = [...this.impl.storage.gadgets.list()]
-        .filter(gadget => gadget.output?.id === "ledger");
+        .filter((gadget): gadget is GadgetRecord => gadget.type === "gadget" && gadget.output?.id === "ledger");
     if (ledgerGadgets.length !== 1) {
       throw new Error("Canonical MilesVault Ledger gadget is missing or ambiguous.");
     }
@@ -10377,7 +10335,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     // the authenticated API. Shared workspaces are never modified on behalf of the observer.
     if (this.impl.ownerId !== ownerId) return false;
     let pointsGadgets = [...this.impl.storage.gadgets.list()]
-        .filter(gadget => gadget.output?.id === "paths-to-points");
+        .filter((gadget): gadget is GadgetRecord => gadget.type === "gadget" && gadget.output?.id === "paths-to-points");
     if (pointsGadgets.length === 0) return false;
     if (pointsGadgets.length !== 1) {
       throw new Error("MilesVault Paths to Points gadget is ambiguous.");
@@ -10470,7 +10428,10 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
         event: "singleton.capsules.ensure.failed", error: err,
       });
     });
-    if (firstOpen) {
+    // MilesVault's native capabilities must be present before a chat can begin. Waiting only on
+    // first-ever workspace creation lets an existing workspace race a newly provisioned Ledger
+    // account and freeze a chat seed without LEDGER.
+    if (firstOpen || this.env.MILESVAULT_AUTH === "true") {
       await ensureCapsules;
     }
 

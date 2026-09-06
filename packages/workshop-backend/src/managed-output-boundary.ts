@@ -11,7 +11,12 @@ export function exposeGatekeeperToAgent(
 }
 
 export function allowActionInPrivateLedgerWorkspace(
-    gatekeeper: {creationSpec?: {type?: string, vendorId?: string}} | undefined): boolean {
-  return gatekeeper?.creationSpec?.type === "ambient" &&
-      gatekeeper.creationSpec.vendorId?.toLowerCase() === "ledger";
+    gatekeeper: {
+      creationSpec?: {type?: string, vendorId?: string},
+      resourceUrl?: string,
+    } | undefined): boolean {
+  // An accepted request from an older chat creates an ordinary resource connection even when it
+  // uses the same authenticated, user-scoped Ledger account as the ambient capability.
+  return gatekeeper?.creationSpec?.vendorId?.toLowerCase() === "ledger" &&
+      gatekeeper.resourceUrl?.replace(/\/+$/, "") === "https://milesvault.com/ledger/current";
 }

@@ -17,11 +17,22 @@ import { AdminConfig } from "./admin-config.js";
 export const DEFAULT_AMBIENT_GATEKEEPER_MODE: AmbientGatekeeperMode = "optional";
 
 /**
- * The configured mode for an ambient vendor, defaulting to "optional" when the admin hasn't set one.
- * Tolerates a config persisted before this field existed (ambientGatekeeperModes may be undefined).
+ * Deployment-owned Gatekeepers are normally optional too. MilesVault is the exception: it is the
+ * native, read-only capability this deployment exists to provide, so users should never have to
+ * "connect" it to the MilesVault application they are already using.
+ */
+export function defaultAmbientGatekeeperMode(vendorId: string): AmbientGatekeeperMode {
+  return ["custom", "airports", "graph", "ledger"].includes(vendorId.toLowerCase())
+    ? "enabled"
+    : DEFAULT_AMBIENT_GATEKEEPER_MODE;
+}
+
+/**
+ * The configured mode for an ambient vendor, falling back to its deployment default. Tolerates a
+ * config persisted before this field existed (ambientGatekeeperModes may be undefined).
  */
 export function ambientGatekeeperMode(config: AdminConfig, vendorId: string): AmbientGatekeeperMode {
-  return config.ambientGatekeeperModes?.[vendorId.toLowerCase()] ?? DEFAULT_AMBIENT_GATEKEEPER_MODE;
+  return config.ambientGatekeeperModes?.[vendorId.toLowerCase()] ?? defaultAmbientGatekeeperMode(vendorId);
 }
 
 /**

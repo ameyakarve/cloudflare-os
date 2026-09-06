@@ -22,6 +22,7 @@ import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER } from './components/menuStyl
 import { useDocumentTitle } from './useDocumentTitle'
 import { AccountsSubscriberAdapter } from './accountsSubscriber'
 import { useDialogSelectPortalContainer } from './useDialogSelectPortalContainer'
+import { appPath } from './appPath'
 
 interface Props {
   rpcStub: RpcStub<PublicApi>
@@ -177,7 +178,10 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
       },
     })
 
-    const subscription = authenticatedApi.subscribeConnectedAccounts(subscriber)
+    // Blueprint bindings must also see forced ambient accounts. They are hidden from the general
+    // Connectors page because users cannot disconnect them, but are valid binding assignments here.
+    const subscription = authenticatedApi.subscribeConnectedAccounts(
+      subscriber, { includeForcedAutoProvisionedAccounts: true })
     subscription.catch(err => {
       if (cancelled) return
       logRpcFailure('Failed to subscribe to connected accounts:', err)
@@ -193,16 +197,22 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     if (!authenticatedApi) return
     setConnectingVendor(vendorId)
     try {
-      const result = await authenticatedApi.connectAccount(vendorId)
-      window.open(result.url, '_blank', 'noopener,noreferrer')
-      toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      const vendor = vendorById.get(vendorId.toLowerCase())
+      if (vendor?.description.autoProvisionsAccount) {
+        await authenticatedApi.provisionAmbientAccount(vendorId)
+        toasts.add({ title: `${vendor.description.displayName} connected.`, variant: 'success' })
+      } else {
+        const result = await authenticatedApi.connectAccount(vendorId)
+        window.open(result.url, '_blank', 'noopener,noreferrer')
+        toasts.add({ title: 'Complete the account connection in the new tab.', variant: 'success' })
+      }
     } catch (err) {
       console.error('Failed to initiate connection:', err)
       toasts.add({ title: 'Failed to start connection flow', variant: 'error' })
     } finally {
       setConnectingVendor(null)
     }
-  }, [authenticatedApi, toasts])
+  }, [authenticatedApi, toasts, vendorById])
 
   const handleReconnectAccount = useCallback(async (accountId: number) => {
     if (!authenticatedApi) return
@@ -568,7 +578,7 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
     const overseer = authenticatedApi.newGadgetFromBlueprint(id, draftAssignments)
     try {
       let metadata = await overseer.getMetadata()
-      window.location.href = `/workspace/${metadata.id}`
+      window.location.href = appPath(`/workspace/${metadata.id}`)
     } catch (err: any) {
       setError(err.message || 'Failed to create gadget from blueprint.')
     } finally {
@@ -1121,7 +1131,7 @@ function BlueprintScreenshotHero({
             aria-label={`Open larger screenshot of ${title}`}
           >
             <img
-              src={screenshotUrl}
+              src={appPath(screenshotUrl)}
               alt={`Screenshot of ${title}`}
               className="aspect-[16/9] w-full object-cover"
             />
@@ -1149,7 +1159,7 @@ function BlueprintScreenshotHero({
         />
         <div className="p-3 sm:p-4">
           <img
-            src={screenshotUrl}
+            src={appPath(screenshotUrl)}
             alt={`Screenshot of ${title}`}
             className="max-h-[calc(var(--app-height)-96px)] w-full rounded-xl object-contain"
           />

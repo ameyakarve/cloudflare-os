@@ -13,6 +13,7 @@ import './styles.css'
 import FrontendErrorBoundary from './FrontendErrorBoundary'
 import { installWorkshopErrorReporting, reportIssue } from './errorReporting'
 import { applySiteFavicon, cacheBustSiteLogoUrl } from './siteLogoUtils'
+import { appPath } from './appPath'
 
 // ---------------------------------------------------------------------------
 // Dev auto-login: if VITE_DEV_AUTO_LOGIN=true, automatically create/login
@@ -94,7 +95,8 @@ function getBackendHost(): string {
 function startConnection(): RpcStub<PublicApi> {
   lastConnectTime = Date.now();
   const apiHost = getBackendHost();
-  const wsUrl = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + apiHost + '/api';
+  const basePath = import.meta.env.BASE_URL.replace(/\/$/, '')
+  const wsUrl = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + apiHost + basePath + '/api';
   const stub = newWebSocketRpcSession<PublicApi>(wsUrl);
   stub.onRpcBroken(handleBroken);
   return stub;
@@ -232,7 +234,11 @@ function AppWithConnection() {
         if (!cancelled) {
           setServerConfig(cfg.siteLogo ? {
             ...cfg,
-            siteLogo: { url: cacheBustSiteLogoUrl(cfg.siteLogo.url) },
+            siteLogo: {
+              url: cacheBustSiteLogoUrl(
+                appPath(cfg.siteLogo.url),
+              ),
+            },
           } : cfg);
         }
       })

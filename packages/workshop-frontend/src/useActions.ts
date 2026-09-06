@@ -105,13 +105,13 @@ function commit(store: Store, status: ActionsState['status'] = store.snapshot.st
   for (const listener of store.listeners) listener()
 }
 
-// Coalesce bursts of entries into one snapshot per frame. Status transitions commit synchronously
-// instead (see openSubscription) so a throttled background tab still settles.
+// Publish state in a microtask: hidden tabs must resolve reviews even when animation frames
+// are paused. Status transitions also commit synchronously (see openSubscription).
 function scheduleNotify(store: Store) {
   if (store.notifyScheduled) return
   store.notifyScheduled = true
 
-  window.requestAnimationFrame(() => {
+  queueMicrotask(() => {
     store.notifyScheduled = false
     commit(store)
   })

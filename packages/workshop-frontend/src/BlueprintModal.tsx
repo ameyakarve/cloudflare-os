@@ -5,6 +5,7 @@ import { RpcStub } from 'capnweb'
 import { BlueprintGadgetSummary, GadgetClient, GadgetMetadata, Overseer, BlueprintBindingAnnotation, BlueprintScreenshotUpload } from '@gadgets/workshop-shared/api'
 import { WorkshopButton, WorkshopIconButton, WorkshopInput, WorkshopInputArea } from './components/WorkshopControls'
 import { copyToClipboard } from './clipboard'
+import { absoluteAppUrl, appPath } from './appPath'
 import {
   BindingCardData,
   BlueprintBindingCard,
@@ -273,7 +274,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
   }
 
   const savedScreenshotUrl = formMode === 'edit' && editingBlueprint?.screenshotUrl && !clearScreenshot
-    ? editingBlueprint.screenshotUrl
+    ? appPath(editingBlueprint.screenshotUrl)
     : null
   const screenshotPreviewUrl = newScreenshotUrl ?? savedScreenshotUrl
 
@@ -526,7 +527,7 @@ export default function BlueprintModal({ open, onClose, overseer, gadget, metada
                         }
                       }}
                       onCopyLink={async () => {
-                        const url = `${window.location.origin}/blueprint/${bp.id}`
+                        const url = absoluteAppUrl(`/blueprint/${bp.id}`)
                         return copyToClipboard(url)
                       }}
                       isConfirmingDelete={confirmingDeleteId === bp.id}

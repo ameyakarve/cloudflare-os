@@ -515,12 +515,14 @@ export interface GatekeeperVendor extends WorkerEntrypoint {
   /**
    * Mint a NEW connected account, with no OAuth flow. Safe to expose on this public interface: it
    * only *creates* accounts — it cannot look up or return an existing account — and it takes no
-   * arguments, so it carries no user identity. The Workshop persists the returned account (like an
-   * OAuth-connected account) and treats it as the authority thereafter. Present only on vendors that
+   * caller-controlled credentials. The Workshop supplies the authenticated profile id so a first-party
+   * vendor can mint a capability scoped to that same user; vendors must not treat arbitrary callers as
+   * trusted identity providers. The Workshop persists the returned account (like an OAuth-connected
+   * account) and treats it as the authority thereafter. Present only on vendors that
    * set VendorDescription.autoProvisionsAccount; callers gate on that flag rather than probing, since
    * RPC stubs cannot report optional-method presence.
    */
-  createAccount?(): Promise<Fetcher<GatekeeperUser>>;
+  createAccount?(options?: {userId?: string}): Promise<Fetcher<GatekeeperUser>>;
 }
 
 export interface GatekeeperConnectCallback extends WorkerEntrypoint {
@@ -1171,6 +1173,25 @@ export type ActionKind = {
 };
 
 /**
+ * Optional structured review data for actions that replace one block of text with another.
+ *
+ * `description` remains the complete, portable audit record. This is only a display hint that lets
+ * approval surfaces show a legible before/after review instead of squeezing a Markdown diff into a
+ * generic action row.
+ */
+export type ActionComparisonPresentation = {
+  type: "comparison";
+  /** Short human-readable description of the change, such as "1 transaction updated". */
+  summary?: string;
+  before?: string;
+  after?: string;
+  beforeLabel?: string;
+  afterLabel?: string;
+  /** Language identifier for monospaced content; informational for now. */
+  language?: string;
+};
+
+/**
  * Describes an action submitted to the action approval queue. This contains all the information
  * needed to:
  * - Decide whether the action needs to be approved and who can approve it.
@@ -1187,6 +1208,9 @@ export type ActionDescription = {
    * consider before approving.
    */
   description: string;
+
+  /** Optional structured display hint. Older clients continue to render `description`. */
+  presentation?: ActionComparisonPresentation;
 
   /**
    * If present, applying this action will push the named commits to the remote resource this

@@ -5,29 +5,12 @@ import {
   type CompletionResult,
   type CompletionSource,
 } from "@codemirror/autocomplete";
-import { LRLanguage, LanguageSupport, syntaxTree } from "@codemirror/language";
-import { styleTags, tags } from "@lezer/highlight";
-import { parser as beancountParser } from "lezer-beancount";
+import { syntaxTree } from "@codemirror/language";
 
 export type BeancountCompletionData = {
   ledgerAccounts: string[];
   catalogueAccounts: string[];
 };
-
-export const beancountLanguage = new LanguageSupport(LRLanguage.define({
-  parser: beancountParser.configure({
-    props: [styleTags({
-      Date: tags.literal,
-      TxnFlag: tags.operator,
-      String: tags.string,
-      Account: tags.variableName,
-      Number: tags.number,
-      Currency: tags.unit,
-      "note open close balance pad document event price commodity query custom option include plugin pushtag poptag":
-        tags.keyword,
-    })],
-  }),
-}));
 
 const directiveKeywords = ["note", "balance", "open", "close", "pad", "price", "event", "document"];
 const accountRoots = ["Assets:", "Liabilities:", "Expenses:", "Income:", "Equity:"];

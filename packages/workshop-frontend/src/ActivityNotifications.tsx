@@ -98,7 +98,9 @@ export default function ActivityNotifications({
                         {formatRelativeTime(action.createdAt)}
                       </span>
                       <span className="mt-1.5 block line-clamp-2 text-[12.5px] leading-[18px] tracking-[-0.2px] text-kumo-subtle">
-                        {action.description.description}
+                        {action.type === 'action' && action.description.presentation?.type === 'comparison'
+                          ? action.description.presentation.summary ?? 'Review the full before and after before approving.'
+                          : action.description.description}
                       </span>
                     </button>
                     <div className="ml-auto flex flex-shrink-0 items-center gap-0.5">

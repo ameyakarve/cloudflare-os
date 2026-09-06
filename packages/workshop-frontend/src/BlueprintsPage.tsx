@@ -12,6 +12,7 @@ import { useAuthenticatedApi } from "./AuthContext";
 import { BindingBadge, uniqueBindingBadges } from "./components/BlueprintCard";
 import { BlueprintPreviewPlaceholder } from "./components/BlueprintPreviewImage";
 import ViewToggle from "./components/ViewToggle";
+import { appPath } from "./appPath";
 
 type VendorMap = Map<string, VendorDescription>;
 
@@ -155,7 +156,7 @@ function BlueprintThumbnail({ blueprint }: { blueprint: BlueprintPublicInfo }) {
     <div className="relative aspect-[16/9] w-full overflow-hidden border-b border-kumo-line bg-kumo-tint">
       {blueprint.screenshotUrl ? (
         <img
-          src={blueprint.screenshotUrl}
+          src={appPath(blueprint.screenshotUrl)}
           alt={`Screenshot of ${blueprint.metadata.title}`}
           className="h-full w-full object-cover"
           loading="lazy"

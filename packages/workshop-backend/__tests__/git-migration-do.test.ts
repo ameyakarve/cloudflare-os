@@ -1,3 +1,4 @@
+import * as Y from "yjs";
 // Exercises the git-storage migration through its *real* trigger: the OverseerImpl constructor
 // noticing `version` 1 and running #migrateToGitStorage under blockConcurrencyWhile, over real
 // SQLite DO storage -- complementing git-migration.test.ts's direct migrateCodeLogToGit calls on
@@ -68,6 +69,62 @@ async function seedLegacyWorkspace(
 }
 
 describe("git-storage migration via the Overseer constructor", () => {
+  it("preserves managed Ledger authority, Points bindings and ordinary drafts across migration", async () => {
+    const name = "milesvault-managed-migration";
+    await seedLegacyWorkspace(name, (ws, impl) => {
+      ws.addGadget(1, "LEDGER_UI");
+      ws.addGadget(2, "POINTS");
+      ws.addGadget(3, "CUSTOM");
+      impl.storage.defaultGadgetId.put(1);
+      const ledger = impl.storage.gadgets.get(1);
+      ledger.systemOutput = "ledger";
+      ledger.bindings = {LEDGER: {target: 10}};
+      impl.storage.gadgets.put(ledger);
+      const points = impl.storage.gadgets.get(2);
+      points.bindings = {LEDGER: {target: 11}};
+      impl.storage.gadgets.put(points);
+      impl.storage.prohibitAllSharing.put(true);
+      ws.edit(T0 + MINUTE, doc => {
+        setFile(doc, "", "client.js", "trusted ledger");
+        setFile(doc, "2", "client.js", "points");
+        setFile(doc, "3", "client.js", "custom");
+      });
+      ws.addChat(1);
+      const draft = ws.docAt("current");
+      const before = Y.encodeStateVector(draft);
+      setFile(draft, "", "client.js", "untrusted legacy draft");
+      setFile(draft, "3", "client.js", "custom draft");
+      ws.addDraft(1, Y.encodeStateAsUpdateV2(draft, before));
+      putAction(makePreIndexActionStorage(impl.ctx.storage), 42);
+    });
+    await abortAllDurableObjects();
+    await inOverseer(name, async impl => {
+      expect(impl.storage.version.get()).toBe(4);
+      expect(impl.managedSystemOutput()).toBe("ledger");
+      expect(impl.storage.prohibitAllSharing.get()).toBe(true);
+      expect(impl.storage.gadgets.get(1).bindings).toEqual({LEDGER: {target: 10}});
+      expect(impl.storage.gadgets.get(2).bindings).toEqual({LEDGER: {target: 11}});
+      expect([...impl.storage.actions.pendingByGatekeeper.list()].map((r: any) => r.id)).toEqual([42]);
+      expect(() => impl.assertWorkspaceMutable()).toThrow("managed by the platform");
+      expect(() => impl.resolveWorkpieceRoot(1, true, 1, true)).toThrow("managed by the platform");
+      expect(() => impl.resolveWorkpieceRoot(3, true, 1, true)).not.toThrow();
+      // A migrated legacy draft cannot become the managed browser preview.
+      expect((await impl.getGadgetUiBundle(1, 1)).jsCode).toContain("trusted ledger");
+      expect((await impl.getGadgetUiBundle(1, 1)).jsCode).not.toContain("untrusted legacy draft");
+      await expect(impl.mergeChanges(1, {profile: USER}, "migration-user"))
+          .resolves.toEqual({outcome: "merged"});
+      expect((await impl.readGadgetFiles(1)).get("client.js")).toBe("trusted ledger");
+      expect((await impl.readGadgetFiles(3)).get("client.js")).toBe("custom draft");
+    });
+    await abortAllDurableObjects();
+    await inOverseer(name, async impl => {
+      expect(impl.storage.version.get()).toBe(4);
+      expect(impl.managedSystemOutput()).toBe("ledger");
+      expect((await impl.readGadgetFiles(1)).get("client.js")).toBe("trusted ledger");
+      expect((await impl.readGadgetFiles(3)).get("client.js")).toBe("custom draft");
+    });
+  });
+
   it("migrates a single-gadget workspace, preserving content across the batching gap",
       async () => {
     let ws = await seedLegacyWorkspace("git-migration-single", (ws, impl) => {

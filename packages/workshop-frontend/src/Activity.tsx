@@ -19,6 +19,7 @@ import { useVendorBranding } from './useVendorBranding'
 import { useResolveAction } from './useResolveAction'
 import { safeExternalUrl } from './utils/safeExternalUrl'
 import AutoApproveConfirmDialog from './components/AutoApproveConfirmDialog'
+import { ActionComparisonReview } from './components/ActionComparisonReview'
 
 export type ActivityView = 'review' | 'history' | 'auto'
 
@@ -651,7 +652,9 @@ function ReviewRequest({
         </div>
       </div>
 
-      {record.description.description && (
+      {record.type === 'action' && record.description.presentation?.type === 'comparison' ? (
+        <ActionComparisonReview presentation={record.description.presentation} />
+      ) : record.description.description && (
         <p className={`mt-1.5 max-w-2xl whitespace-pre-wrap text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle ${expanded ? '' : 'line-clamp-2'}`}>
           {record.description.description}
         </p>
@@ -711,7 +714,9 @@ function HistoryRow({
 
       {expanded && (
         <div className="border-b border-kumo-line/70 px-5 pb-3 pl-[86px] pt-1">
-          {record.description.description && (
+          {record.type === 'action' && record.description.presentation?.type === 'comparison' ? (
+            <ActionComparisonReview presentation={record.description.presentation} />
+          ) : record.description.description && (
             <p className="m-0 whitespace-pre-wrap text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
               {record.description.description}
             </p>

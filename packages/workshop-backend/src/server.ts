@@ -66,6 +66,7 @@ type Env = Cloudflare.Env & {
   // Set these if using Cloudflare Access for authentication, otherwise username/password is used.
   CF_ACCESS_AUD?: string,  // audience
   CF_ACCESS_ISS?: string,  // team URL, i.e. https://<team>.cloudflareaccess.com
+  MILESVAULT_AUTH?: string;
   DEV?: boolean;
   FLAGS?: Flagship;
 }
@@ -280,6 +281,12 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   async openGadget(id: string, shareKey?: string,
                    configureObservers?: RpcStub<ObserverConfigCallback>)
       : Promise<RpcStub<Overseer>> {
+    // The authenticated MilesVault identity already authorizes its native Ledger account. Finish
+    // provisioning before Overseer seeds ambient capabilities, so agents never have to ask the
+    // same signed-in user to connect MilesVault back to itself.
+    if (this.env.MILESVAULT_AUTH === "true") {
+      await this.#user.provisionAmbientAccount("ledger");
+    }
     // Paths to Points consumes the authenticated user's own balances. It is a deployment-owned
     // capability, not a generic account connection, so install or repair it before gadget code
     // can run. The DO returns without mutation when this is another output or a shared workspace.
@@ -764,27 +771,33 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
     let email = this.accessPayload.email as string;
     let userId = this.users.idFromName(email);
-    let signupsEnabled = (await readAdminConfig(this.env)).signupsEnabled;
+    // MilesVault has already authenticated and entitled this identity before
+    // the private service-binding hop, so OS account materialization must not
+    // depend on the standalone Workshop signup toggle.
+    let signupsEnabled = this.env.MILESVAULT_AUTH === "true" ||
+        (await readAdminConfig(this.env)).signupsEnabled;
     let accountCreated =
         await this.users.get(userId).authenticateFromCfAccess(email, signupsEnabled);
     if (accountCreated) {
       recordAnalytics(this.ctx, this.env, {
         event_name: "account_created",
         user_id: userId.toString(),
-        source: "cf_access",
+        source: this.env.MILESVAULT_AUTH === "true" ? "milesvault" : "cf_access",
       });
     }
     recordAnalytics(this.ctx, this.env, {
       event_name: "user_authenticated",
       user_id: userId.toString(),
-      source: "cf_access",
+      source: this.env.MILESVAULT_AUTH === "true" ? "milesvault" : "cf_access",
     });
-    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession);
+    let externalIdentityKey = this.accessPayload.externalIdentityKey;
+    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession,
+        typeof externalIdentityKey === "string" ? externalIdentityKey : email);
   }
 
   async login(username: string, passwordHash: Uint8Array): Promise<string | null> {
-    if (this.env.CF_ACCESS_AUD) {
-      throw new Error("This deployment requires Cloudflare Access authentication.");
+    if (this.env.CF_ACCESS_AUD || this.env.MILESVAULT_AUTH === "true") {
+      throw new Error("This deployment requires external authentication.");
     }
     if (!isPasswordAuthEnabled(this.env)) {
       throw new Error("Password login is disabled on this deployment. Use a sign-in option.");
@@ -807,8 +820,8 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
   async createAccount(username: string, displayName: string, passwordHash: Uint8Array)
       : Promise<string | null> {
-    if (this.env.CF_ACCESS_AUD) {
-      throw new Error("This deployment requires Cloudflare Access authentication.");
+    if (this.env.CF_ACCESS_AUD || this.env.MILESVAULT_AUTH === "true") {
+      throw new Error("This deployment requires external authentication.");
     }
     if (!isPasswordAuthEnabled(this.env)) {
       throw new Error("Password signup is disabled on this deployment. Use a sign-in option.");
@@ -903,19 +916,29 @@ export default {
 
       let accessPayload: JWTPayload | undefined;
 
-      if (env.CF_ACCESS_AUD) {
+      if (env.CF_ACCESS_AUD || env.MILESVAULT_AUTH === "true") {
         if (req.headers.get("Origin") !== url.origin) {
           return new Response("Cross-origin API access not allowed.", { status: 403 });
         }
 
-        const payload = await verifyCfAccessJwt(req, env);
-        if (!payload) return new Response("Invalid CF access JWT.", { status: 403 });
+        if (env.MILESVAULT_AUTH === "true") {
+          const ledgerKey = req.headers.get("x-milesvault-user")?.trim();
+          if (!ledgerKey || ledgerKey.length > 254 || !/^[^@\s]+@[^@\s]+$/.test(ledgerKey)) {
+            return new Response("Missing trusted MilesVault identity.", { status: 403 });
+          }
+          // OS keeps a normalized account identity; the existing MilesVault Durable Object key
+          // remains exact and case-sensitive, and is carried separately to the Ledger output.
+          accessPayload = { email: ledgerKey.toLowerCase(), externalIdentityKey: ledgerKey };
+        } else {
+          const payload = await verifyCfAccessJwt(req, env);
+          if (!payload) return new Response("Invalid CF access JWT.", { status: 403 });
 
-        if (!payload.email) {
-          return new Response("Access JWT didn't specify email address.", { status: 403 });
+          if (!payload.email) {
+            return new Response("Access JWT didn't specify email address.", { status: 403 });
+          }
+
+          accessPayload = payload;
         }
-
-        accessPayload = payload;
       }
 
       // HACK: Implement `abortSession` callback by closing the websocket.

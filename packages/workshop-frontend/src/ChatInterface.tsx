@@ -1,3 +1,4 @@
+import { ActionComparisonReview } from "./components/ActionComparisonReview";
 import { logRpcFailure } from "./rpcErrors";
 import {
   Fragment,
@@ -85,7 +86,9 @@ import {
 } from "@gadgets/workshop-shared/api";
 import { composeCodeChange, type CodeChange } from "@gadgets/workshop-shared/code-change";
 import type { ChatChangeRow } from "./otClient";
-import { ActionKind } from "@gadgets/workshop-shared/gatekeeper";
+import {
+  ActionKind,
+} from "@gadgets/workshop-shared/gatekeeper";
 import {
   useSlashCommandChoice, type OverseerSource,
 } from "./components/chat/slash-command-catalog";
@@ -1179,6 +1182,8 @@ export const MarkdownMessage = memo(function MarkdownMessage(
     </ReactMarkdown>
   );
 });
+
+
 
 // Build a temporary object URL for inlined attachment bytes, revoking it when no longer needed.
 function useAttachmentObjectUrl(content: Uint8Array | undefined, mimeType: string): string | null {
@@ -4937,6 +4942,30 @@ function ChatInterface({
     // A blocking (awaitDecision) action suspends the agent turn, so present it as a prominent
     // callout laid out like the connection-request card: a permissions icon, title + resource +
     // details, and the approve/deny actions.
+    if (isBlocking && log.description.presentation?.type === "comparison") {
+      return (
+        <div className="group/work max-w-[860px] text-[14px] leading-5 tracking-[-0.25px] text-kumo-subtle">
+          <div className="rounded-2xl border border-kumo-line bg-kumo-base px-4 py-3 shadow-[0_1px_2px_rgba(82,16,0,0.04)]">
+            <div className="flex items-start gap-3">
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-kumo-tint text-kumo-brand" aria-hidden="true">
+                <ShieldCheck size={20} weight="fill" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="font-medium leading-5 text-kumo-default [overflow-wrap:anywhere]">
+                  {log.description.title}
+                </div>
+                <div className="mt-0.5">{resourceMeta}</div>
+              </div>
+            </div>
+            <ActionComparisonReview presentation={log.description.presentation} />
+            <div className="mt-3 flex items-center justify-end gap-1 border-t border-kumo-line/70 pt-3">
+              {actionControls}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     if (isBlocking) {
       return (
         <div className="group/work max-w-[860px] text-[14px] leading-5 tracking-[-0.25px] text-kumo-subtle">

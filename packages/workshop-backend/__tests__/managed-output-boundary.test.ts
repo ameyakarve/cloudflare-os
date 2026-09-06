@@ -15,15 +15,22 @@ describe("managed output capability boundary", () => {
     expect(exposeGatekeeperToAgent({})).toBe(true);
   });
 
-  it("allows only the ambient approval-gated Ledger to act in the private workspace", () => {
+  it("allows only the authenticated MilesVault Ledger to act in the private workspace", () => {
     expect(allowActionInPrivateLedgerWorkspace({
       creationSpec: {type: "ambient", vendorId: "LEDGER"},
+      resourceUrl: "https://milesvault.com/ledger/current",
+    })).toBe(true);
+    expect(allowActionInPrivateLedgerWorkspace({
+      creationSpec: {type: "gatekeeper", vendorId: "ledger"},
+      resourceUrl: "https://milesvault.com/ledger/current/",
     })).toBe(true);
     expect(allowActionInPrivateLedgerWorkspace({
       creationSpec: {type: "ambient", vendorId: "graph"},
+      resourceUrl: "https://milesvault.com/ledger/current",
     })).toBe(false);
     expect(allowActionInPrivateLedgerWorkspace({
-      creationSpec: {type: "resource", vendorId: "ledger"},
+      creationSpec: {type: "gatekeeper", vendorId: "ledger"},
+      resourceUrl: "https://example.com/ledger/current",
     })).toBe(false);
     expect(allowActionInPrivateLedgerWorkspace(undefined)).toBe(false);
   });

@@ -790,13 +790,19 @@ export default function GadgetEditor() {
     return () => { cancelled = true; setHookedGadgetIds(NO_GADGETS) }
   }, [overseer, hookSignature, metadata !== null, isUseOnly])
   const pendingActionCount = pendingActions.length
-  const approvedActionCount = useMemo(() => {
-    let count = 0
-    for (const record of actionsById.values()) {
-      if (record.type === 'action' && record.state === 'approved') count++
+  const [approvedActionCount, setApprovedActionCount] = useState(0)
+  const approvedStates = useRef(new Set<number>())
+  useEffect(() => {
+    approvedStates.current = new Set()
+    setApprovedActionCount(0)
+  }, [overseerStub])
+  useActionEntries(overseerStub, record => {
+    if (record.type === 'action' && record.state === 'approved'
+        && !approvedStates.current.has(record.id)) {
+      approvedStates.current.add(record.id)
+      setApprovedActionCount(count => count + 1)
     }
-    return count
-  }, [actionsById])
+  })
 
   // Whether the *selected* gadget has code. When no gadget is selected, the code interface is
   // unmounted and raw `hasCode` can't update, but a gadget-less workspace has no code to show.

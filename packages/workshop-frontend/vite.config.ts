@@ -70,6 +70,7 @@ export default defineConfig(({ mode }) => {
     // Spread, not a literal `run: {...}`: `run` is Vite+'s field and vite's own `defineConfig` has
     // no such property, but the excess-property check doesn't reach spreads.
     ...runConfig,
+    base: env.VITE_BASE_PATH?.trim() || '/',
     plugins: [
       TanStackRouterVite({ target: 'react', autoCodeSplitting: true }),
       react(),

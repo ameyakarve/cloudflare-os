@@ -1,3 +1,4 @@
+import * as Y from "yjs";
 import {
   abortAllDurableObjects,
   createExecutionContext,
@@ -304,17 +305,20 @@ describe("deployment-managed Ledger workspace", () => {
     const ledgerBundleBefore = await gadget.getUiBundle();
     using secondary = await workspace.createGadget("Secondary");
     const secondaryId = await secondary.getId();
-    const proposed = new Y.Doc();
-    const secondaryClient = new Y.Text();
-    secondaryClient.insert(0, "export default function App() { return 'secondary'; }");
-    proposed.getMap<Y.Text>(String(secondaryId)).set("client.js", secondaryClient);
-    const ledgerClient = new Y.Text();
-    ledgerClient.insert(0, "throw new Error('tampered');");
-    proposed.getMap<Y.Text>().set("client.js", ledgerClient);
-
     const chatId = await workspace.newChat("Edit secondary", null);
-    await workspace.updateCode(Y.encodeStateAsUpdateV2(proposed), chatId);
-    await workspace.mergeChanges(chatId, null, {includeDraft: true});
+    const secondaryHead = (await workspace.listWorkpieces()).find(piece => piece.id === secondaryId);
+    if (secondaryHead?.type !== "gadget" || !secondaryHead.commitId) throw new Error("Secondary head missing");
+    const submission = {
+      clientId: "managed-boundary", seq: 0, generation: 0, revision: 0,
+      pins: [{gadgetId: secondaryId, baseCommit: secondaryHead.commitId}],
+      change: {[secondaryId]: [["client.js", {set: "export default function App() { return 'secondary'; }"}]]},
+    } satisfies Parameters<typeof workspace.submitCodeChange>[1];
+    expect((await rejection(workspace.submitCodeChange(chatId, {
+      ...submission,
+      change: {...submission.change, [metadata.defaultGadgetId!]: [["client.js", {set: "tampered"}]]},
+    }))).message).toBe(expected);
+    await workspace.submitCodeChange(chatId, submission);
+    await workspace.mergeChanges(chatId);
     expect((await secondary.getUiBundle())?.jsCode).toContain("secondary");
     expect(await gadget.getUiBundle()).toEqual(ledgerBundleBefore);
 

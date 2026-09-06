@@ -27,6 +27,18 @@ describe('useActions', () => {
     vi.restoreAllMocks()
   })
 
+  it.each(['approved', 'rejected'] as const)('publishes %s in a hidden tab without animation frames', async state => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    const server = makeOverseer()
+    await view.render(<Probe overseer={server.overseer} />)
+    await server.resolveSubscription()
+    await server.resolvePendingQuery({ entries: [] })
+    await server.emit(entry(9))
+    expect(latest.pending.map(e => e.id)).toEqual([9])
+    await server.emit(entry(9, { state }))
+    expect(latest.pending).toEqual([])
+  })
+
   it('initiates the subscription before the first pending page, with no startAfter', async () => {
     const server = makeOverseer()
     await view.render(<Probe overseer={server.overseer} />)

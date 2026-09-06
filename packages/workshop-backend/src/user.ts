@@ -1315,7 +1315,9 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   // caller must have already confirmed the vendor sets autoProvisionsAccount (so createAccount is
   // present) and that the user has no account for it yet.
   async #createAutoProvisionedAccount(vendorId: string, vendor: Service<GatekeeperVendor>): Promise<void> {
-    let account = await (vendor as unknown as AccountCreatorStub).createAccount();
+    let account = await (vendor as unknown as AccountCreatorStub).createAccount({
+      userId: this.storage.profile.get().id,
+    });
     // Resolve the description before allocating the id, so a describe() failure doesn't burn a slot.
     let description = await account.describe();
     let accountId = this.storage.nextAccountId.get();
