@@ -1857,11 +1857,11 @@ class OverseerImpl implements AgentHooks {
   }
 
   /** Share agent allowance with its tools; ordinary user operations receive a fresh bounded run. */
-  async getUsageBudget(caller: GatekeeperCaller): Promise<DeploymentUsageRun | undefined> {
+  async getUsageBudget(caller: GatekeeperCaller): Promise<NativeRpcStub<DeploymentUsageRun> | undefined> {
     if (!deploymentUsageEnabled(this.env)) return undefined;
     const chatId = caller.from === "hook" ? undefined : caller.chatId;
     const active = chatId === undefined ? undefined : this.#liveChats.get(chatId)?.usageScope;
-    if (active) return active.borrow();
+    if (active) return new NativeRpcStub(active.borrow());
     if (caller.from === "agent") throw new DeploymentUsageError("expired_run");
     await this.checkDeploymentAccess();
     if (!this.ownerId) throw new DeploymentUsageError();
@@ -1874,8 +1874,9 @@ class OverseerImpl implements AgentHooks {
     if (existing) { await existing.reserve(usage); return; }
     if (!deploymentUsageEnabled(this.env)) return;
     const run = await this.getUsageBudget(caller);
-    // The local object may be a borrowed RpcTarget; mint a native stub for the lifetime helper.
-    await using scope = await UsageScope.open(new NativeRpcStub(run!));
+    // This is already a native stub, including for borrowed in-DO targets. Wrapping a stub
+    // with new RpcStub treats the stub itself as a target and loses the remote methods.
+    await using scope = await UsageScope.open(run!);
     await scope.reserve(usage);
   }
 
