@@ -326,6 +326,9 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   async listOutputs(): Promise<ListOutputsResult> {
+    // Native deployments do not ship the MilesVault Ledger blueprint or account capability.
+    if (this.env.MILESVAULT_AUTH !== "true") return this.#user.listOutputs();
+
     // The API request boundary starts format installation in the background. Await the same
     // idempotent installer here before resolving the singleton, otherwise a user's first Outputs
     // visit can race the install, miss the Ledger blueprint, and stop polling with no Ledger.
