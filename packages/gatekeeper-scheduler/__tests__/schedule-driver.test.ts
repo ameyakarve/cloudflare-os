@@ -827,6 +827,10 @@ describe("ScheduleDriver", () => {
         },
         activationTime,
       );
+    }
+    // Enabling another schedule replans the real alarm. Keep every row in the future
+    // until all enables finish, so delivery cannot race the failure-fixture setup.
+    for (const scheduleId of ["broken", "healthy"]) {
       await makeActiveScheduleDue(driver, "workspace-a", scheduleId);
     }
     await updateSchedule(driver, "workspace-a", "broken", (stored) => ({
