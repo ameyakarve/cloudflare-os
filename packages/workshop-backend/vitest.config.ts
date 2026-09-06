@@ -39,12 +39,14 @@ export default defineConfig({
     textModules,
     capnwebValidate(),
     cloudflareTest({
-      main: './src/server.ts',
+      main: './__tests__/deployment-identity-worker.ts',
       miniflare: {
         compatibilityDate: '2026-09-04',
-        compatibilityFlags: ['experimental', 'nodejs_compat'],
+        compatibilityFlags: ['experimental', 'nodejs_compat', 'allow_irrevocable_stub_storage'],
         durableObjects: {
           TEST_OVERSEER: { className: 'OverseerDurableObject', useSQLite: true },
+          TEST_USER: { className: 'UserDurableObject', useSQLite: true },
+          TEST_IDENTITY_GATEKEEPER: { className: 'IdentityTestGatekeeper', useSQLite: true },
         },
       },
     }),

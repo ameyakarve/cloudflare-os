@@ -12,6 +12,8 @@ import type { AdminSettings } from "./admin-settings.js";
 import { isReservedBlueprintKey, readBlueprintKvRecord } from "./blueprint-archive.js";
 import { filterEnabledResources, isResourceDisabled, readAdminConfig } from "./admin-config.js";
 import { buildGatekeeperVendorMap } from "./auth/auth-vendors.js";
+import { accountProvider } from "./deployment-identity.js";
+import type { DeploymentIdentity } from "@gadgets/workshop-shared/gatekeeper";
 
 const logger = createWorkshopLogger("workshop.user");
 
@@ -30,6 +32,10 @@ type ConnectedAccountRecord = {
   // (no OAuth flow), rather than the user connecting it. Such accounts are protected from manual
   // disconnect, since deleting one permanently destroys the user's data in that gatekeeper.
   autoProvisioned?: boolean;
+  // Exact scope supplied by a private deployment adapter, absent for ordinary accounts.
+  deploymentStorageKey?: string;
+  // Changes when an existing scoped capability is repaired; consumers refresh the same binding.
+  revision?: number;
 };
 
 /**
@@ -40,6 +46,7 @@ export type ProvidedAccountInfo = {
   accountId: number;
   vendorId: string;
   description: AccountDescription;   // carries `singleton` / `providesUi` declarations
+  revision?: number;
 };
 
 // The singleton/UI methods (createAccount on GatekeeperVendor; getSingletonGatekeeperClass /
@@ -195,6 +202,7 @@ function makeUserStorage(storage: DurableObjectStorage) {
       cloudflareBilling: <CloudflareBilling | null>null,
 
       created: false,
+      deploymentIdentity: <DeploymentIdentity | null>null,
       profile: <AiChatAuthorInfo>{
         type: "user",
         name: "User",
@@ -346,6 +354,30 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     }
 
     return false;
+  }
+
+  /** Bind identity supplied by the private ingress; this method is not exposed by the browser API. */
+  async bindDeploymentIdentity(identity: DeploymentIdentity): Promise<void> {
+    if (identity.subject !== this.storage.profile.get().id || !identity.storageKey) {
+      throw new Error("Deployment identity does not match this account.");
+    }
+    let existing = this.storage.deploymentIdentity.get();
+    if (existing && existing.storageKey !== identity.storageKey) {
+      throw new Error("The canonical identity for this account cannot be changed implicitly.");
+    }
+    this.storage.deploymentIdentity.put(identity);
+    for (let record of this.#connectedAccountRecords()) {
+      let provider = accountProvider(this.env, record.vendorId);
+      if (!provider || record.deploymentStorageKey === identity.storageKey) continue;
+      let account = await provider.createAccount(identity);
+      let description = await account.describe();
+      let current = this.storage.connectedAccounts.get(record.id);
+      if (!current || current.deploymentStorageKey === identity.storageKey) continue;
+      this.storage.connectedAccounts.put({
+        ...current, account, description, deploymentStorageKey: identity.storageKey,
+        revision: (current.revision ?? 0) + 1,
+      });
+    }
   }
 
   async #newSessionToken(): Promise<string> {
@@ -1315,9 +1347,12 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   // caller must have already confirmed the vendor sets autoProvisionsAccount (so createAccount is
   // present) and that the user has no account for it yet.
   async #createAutoProvisionedAccount(vendorId: string, vendor: Service<GatekeeperVendor>): Promise<void> {
-    let account = await (vendor as unknown as AccountCreatorStub).createAccount({
-      userId: this.storage.profile.get().id,
-    });
+    let provider = accountProvider(this.env, vendorId);
+    let identity = this.storage.deploymentIdentity.get();
+    if (provider && !identity) throw new Error("This account requires verified deployment identity.");
+    let account = provider
+        ? await provider.createAccount(identity!)
+        : await (vendor as unknown as AccountCreatorStub).createAccount();
     // Resolve the description before allocating the id, so a describe() failure doesn't burn a slot.
     let description = await account.describe();
     let accountId = this.storage.nextAccountId.get();
@@ -1328,6 +1363,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       description,
       vendorId,
       autoProvisioned: true,
+      ...(provider ? {deploymentStorageKey: identity!.storageKey, revision: 1} : {}),
     });
   }
 
@@ -1387,7 +1423,10 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       // A "disabled" ambient gatekeeper's account stays dormant: don't surface its singleton capsule
       // or management UI. (Its data is preserved, so re-enabling restores it.)
       if (rec.autoProvisioned && ambientGatekeeperMode(config, rec.vendorId) === "disabled") continue;
-      result.push({ accountId: rec.id, vendorId: rec.vendorId, description: rec.description });
+      if (accountProvider(this.env, rec.vendorId) &&
+          rec.deploymentStorageKey !== this.storage.deploymentIdentity.get()?.storageKey) continue;
+      result.push({ accountId: rec.id, vendorId: rec.vendorId, description: rec.description,
+        ...(rec.revision ? {revision: rec.revision} : {}) });
     }
     return result;
   }
