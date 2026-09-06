@@ -1,3 +1,5 @@
+import { streamWithUsage } from "./model-usage.js";
+import { deploymentUsageEnabled, UsageScope } from "./deployment-usage.js";
 import { DurableObject, RpcStub, RpcTarget } from "cloudflare:workers";
 import { validateRpc } from "capnweb-validate";
 import type {
@@ -50,6 +52,7 @@ type GatewayMetadataContext = {
 };
 
 type ModelRoutingOptions = {
+  usageScope?: UsageScope;
   sessionAffinity?: string;
   userGateway?: UserGatewayRouting;
   metadata?: GatewayMetadataContext;
@@ -60,6 +63,8 @@ type ModelRoutingOptions = {
  * handle-level knobs.
  */
 export type ModelStreamOptions = SimpleStreamOptions & {
+  usageScope?: UsageScope;
+  usageRequired?: boolean;
   /**
    * When false, suppress the handle's per-API thinking/reasoning defaults so the request runs
    * without extended thinking (as far as the model allows). Used by completeText(): one-shot
@@ -302,7 +307,7 @@ function makeHandle(args: HandleArgs): ModelHandle {
   const handle: ModelHandle = {
     model: args.model,
     aiGatewayLogRoute: args.aiGatewayLogRoute,
-    stream: (model, context, { thinking = true, ...options } = {}) => {
+    stream: (model, context, { thinking = true, usageScope, usageRequired, ...options } = {}) => {
       // Never let a failed request read a previous request's response metadata.
       handle.lastResponse = undefined;
       const headers: ProviderHeaders = {
@@ -341,7 +346,9 @@ function makeHandle(args: HandleArgs): ModelHandle {
           return bridgePdfAttachments(args.model.api, replaced ?? payload) ?? replaced;
         },
       };
-      return streamFn(model, context, merged);
+      return usageRequired || usageScope
+          ? streamWithUsage(streamFn, model, context, merged, usageScope)
+          : streamFn(model, context, merged);
     },
   };
   return handle;
@@ -356,6 +363,15 @@ function makeHandle(args: HandleArgs): ModelHandle {
 export function getModel(env: Cloudflare.Env, config: AiModelConfig,
                          initiator: AiChatAuthorInfo,
                          options: ModelRoutingOptions = {}): ModelHandle {
+  const handle = resolveModel(env, config, initiator, options);
+  const stream = handle.stream;
+  handle.stream = (model, context, callOptions) => stream(model, context, {...callOptions,
+    usageScope: options.usageScope, usageRequired: deploymentUsageEnabled(env)});
+  return handle;
+}
+
+function resolveModel(env: Cloudflare.Env, config: AiModelConfig,
+    initiator: AiChatAuthorInfo, options: ModelRoutingOptions): ModelHandle {
   // BYOK: a connected user's own Cloudflare account pays for everything (all providers, including
   // Workers AI), routed through the user's own AI Gateway with unified billing. Honored regardless
   // of whether a platform AI Gateway is configured, so connected users are always billed correctly.
@@ -684,10 +700,7 @@ export class LanguageModelGatekeeper
 
   async startSession(approvalQueue: RpcStub<ApprovalQueue>)
       : Promise<LanguageModelBinding> {
-    let model = getModel(this.env, this.ctx.props.config, this.ctx.props.initiator, {
-      metadata: this.ctx.props.metadata,
-    });
-    return new LanguageModelBindingImpl(model);
+    return new LanguageModelBindingImpl(this.env, this.ctx.props, approvalQueue);
   }
 
   applyAction(action: number): Promise<void> {
@@ -713,15 +726,23 @@ export class LanguageModelGatekeeper
 
 @validateRpc()
 class LanguageModelBindingImpl extends RpcTarget implements LanguageModelBinding {
-  constructor(private model: ModelHandle) {
+  #approvalQueue: RpcStub<ApprovalQueue>;
+  constructor(private env: Cloudflare.Env, private props: LanguageModelGatekeeperProps,
+      approvalQueue: RpcStub<ApprovalQueue>) {
     super();
+    this.#approvalQueue = approvalQueue.dup();
   }
 
+  [Symbol.dispose]() { this.#approvalQueue[Symbol.dispose](); }
+
   async run(options: {prompt: string, systemPrompt?: string}): Promise<string> {
-    // TODO: Should we be calling authorizeObservation() here? It's not really observing anything,
-    //   but you might want the audit logs?
-    // TODO: Account LLM costs back to the calling gadget.
-    return await completeText(this.model, {
+    await this.#approvalQueue.authorizeObservation({title: "Run language model",
+      description: "Generate a response using the connected language model."});
+    const run = deploymentUsageEnabled(this.env) ? await (this.#approvalQueue as RpcStub<ApprovalQueue & Required<Pick<ApprovalQueue, "getUsageBudget">>>).getUsageBudget() : undefined;
+    await using budget = run ? await UsageScope.open(run) : undefined;
+    const model = getModel(this.env, this.props.config, this.props.initiator,
+        {metadata: this.props.metadata, usageScope: budget});
+    return await completeText(model, {
       prompt: options.prompt,
       systemPrompt: options.systemPrompt,
     });

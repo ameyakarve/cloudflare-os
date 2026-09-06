@@ -926,6 +926,8 @@ export interface ObservationAuthorizer extends RpcTarget {
    */
   authorizeObservation(description: ObservationDescription): Promise<void>;
 
+
+
   /**
    * Get the workspace's git cache, scoped to this gatekeeper (see `GitCache` for the view rules).
    *
@@ -1002,6 +1004,10 @@ export interface SlashCommandProvider extends RpcTarget {
  * called before applying them.
  */
 export interface ApprovalQueue extends ObservationAuthorizer {
+  /** Optional deployment quota scope. Reserve before work and dispose when finished.
+   * This is separate from observation authorization and must never be exposed to Gadget code. */
+  getUsageBudget?(): Promise<import("./deployment-usage").DeploymentUsageRun | undefined>;
+
   // TODO: Method to indicate that the gadget tried to perform an action that the gatekeeper itself
   //   hasn't been authorized to do (e.g. the user hasn't authorized the right OAuth scopes). The
   //   system should direct the user to the right UI to authorize the action.

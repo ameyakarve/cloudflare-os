@@ -63,6 +63,8 @@ declare global {
       // Private deployment policy. Required deployments fail closed if the binding is missing.
       DEPLOYMENT_ACCESS_POLICY?: Service<import("@gadgets/workshop-shared/deployment-access").DeploymentAccessPolicy>;
       DEPLOYMENT_ACCESS_REQUIRED?: string;
+      DEPLOYMENT_USAGE_POLICY?: Service<import("@gadgets/workshop-shared/deployment-usage").DeploymentUsagePolicy>;
+      DEPLOYMENT_USAGE_REQUIRED?: string;
       CF_ACCESS_ISS?: string;   // team URL, e.g. https://<team>.cloudflareaccess.com
 
       // Comma-separated allowlist of gatekeeper vendor ids permitted to drive sign-in (e.g.

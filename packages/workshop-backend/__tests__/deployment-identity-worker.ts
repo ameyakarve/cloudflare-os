@@ -1,7 +1,7 @@
 export { default } from '../src/server.js';
 export * from '../src/server.js';
 // Name the preview loopbacks explicitly so the test pool discovers their entrypoints.
-export { GatekeeperLoopback, GadgetTailLoopback } from '../src/server.js';
+export { GatekeeperLoopback, GadgetTailLoopback, LanguageModelGatekeeper } from '../src/server.js';
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import type { DeploymentIdentity } from '@gadgets/workshop-shared/gatekeeper';
 import type { DeploymentAccessDecision } from '@gadgets/workshop-shared/deployment-access';
@@ -43,4 +43,21 @@ export class IdentityTestGatekeeper extends DurableObject<Cloudflare.Env, Deploy
   getStorageKey() { return this.ctx.props.storageKey; }
   putMarker(value: string) { this.ctx.storage.kv.put('marker', value); }
   getMarker() { return this.ctx.storage.kv.get<string>('marker'); }
+}
+
+/** Native private-quota fixture: verifies exact identity and explicit resume references. */
+export class IdentityTestUsagePolicy extends WorkerEntrypoint<Cloudflare.Env, {key: string; expiresAt: number; resumeId?: string}> {
+  async beginRun(key: string, runId: string) {
+    return key === this.ctx.props.key ? {allowed: true as const, runId, expiresAt: this.ctx.props.expiresAt}
+      : {allowed: false as const, reason: 'unavailable' as const};
+  }
+  async getRunGrant(key: string, runId: string) {
+    return runId === this.ctx.props.resumeId ? this.beginRun(key, runId)
+      : {allowed: false as const, reason: 'expired_run' as const};
+  }
+  async reserve(key: string) {
+    return key === this.ctx.props.key ? {allowed: true as const} : {allowed: false as const, reason: 'unavailable' as const};
+  }
+  async settleTokens() {}
+  async finishRun() {}
 }

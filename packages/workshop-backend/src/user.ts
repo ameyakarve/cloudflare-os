@@ -1,3 +1,4 @@
+import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, DeploymentUsageRunImpl } from "./deployment-usage.js";
 import { readDeploymentAccess } from "./deployment-access.js";
 import type { DeploymentAccessGrant } from "@gadgets/workshop-shared/deployment-access";
 import { RpcStub } from "capnweb";
@@ -372,6 +373,20 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
         .then(grant => { this.#accessGrant = grant; return grant; })
         .finally(() => { this.#accessLookup = undefined; });
     return this.#accessLookup;
+  }
+
+  /** Begin a quota run for this stored identity. This private DO method is not browser API. */
+  async beginDeploymentUsageRun(existingRunId?: string) {
+    if (!deploymentUsageEnabled(this.env)) return undefined;
+    await this.getDeploymentAccessGrant();
+    const key = this.storage.deploymentIdentity.get()?.storageKey;
+    const policy = this.env.DEPLOYMENT_USAGE_POLICY;
+    if (!key || !policy) throw new DeploymentUsageError();
+    const result = await boundedUsage((async () => existingRunId
+      ? await policy.getRunGrant(key, existingRunId)
+      : await policy.beginRun(key, crypto.randomUUID()))());
+    if (result?.allowed !== true) throw new DeploymentUsageError(result?.allowed === false ? result.reason : undefined);
+    return new DeploymentUsageRunImpl(policy, key, result, () => this.getDeploymentAccessGrant());
   }
 
   /** Bind identity supplied by the private ingress; this method is not exposed by the browser API. */
