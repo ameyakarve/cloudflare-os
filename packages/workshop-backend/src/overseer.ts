@@ -13835,15 +13835,17 @@ export class AgentSpawnerGatekeeper
 @validateRpc()
 class AgentSpawnerBindingImpl extends RpcTarget implements AgentSpawnerBinding {
   #approvalQueue: NativeRpcStub<ApprovalQueue>;
-  constructor(private ctx: DurableObjectState<AgentSpawnerBindingProps>, approvalQueue: NativeRpcStub<ApprovalQueue>) {
+  #ctx: DurableObjectState<AgentSpawnerBindingProps>;
+  constructor(ctx: DurableObjectState<AgentSpawnerBindingProps>, approvalQueue: NativeRpcStub<ApprovalQueue>) {
     super();
     this.#approvalQueue = approvalQueue.dup();
+    this.#ctx = ctx;
   }
   [Symbol.dispose]() { this.#approvalQueue[Symbol.dispose](); }
 
   #getOverseer() {
-    let ns = this.ctx.exports.OverseerDurableObject;
-    let id = ns.idFromString(this.ctx.props.overseerId);
+    let ns = this.#ctx.exports.OverseerDurableObject;
+    let id = ns.idFromString(this.#ctx.props.overseerId);
     return ns.get(id);
   }
 
@@ -13851,13 +13853,13 @@ class AgentSpawnerBindingImpl extends RpcTarget implements AgentSpawnerBinding {
     await this.#approvalQueue.authorizeObservation({title: "Start an agent",
       description: "Start an agent with this connection's configured resources."});
     return this.#getOverseer().spawnAgent(
-        title, prompt, this.ctx.props.config, this.ctx.props.creatorUserId);
+        title, prompt, this.#ctx.props.config, this.#ctx.props.creatorUserId);
   }
 
   async spawnCallable(title: string, prompt: string): Promise<Fetcher<any>> {
     await this.#approvalQueue.authorizeObservation({title: "Start a callable agent",
       description: "Start a callable agent with this connection's configured resources."});
     return this.#getOverseer().spawnAgent(
-        title, prompt, this.ctx.props.config, this.ctx.props.creatorUserId, true);
+        title, prompt, this.#ctx.props.config, this.#ctx.props.creatorUserId, true);
   }
 }

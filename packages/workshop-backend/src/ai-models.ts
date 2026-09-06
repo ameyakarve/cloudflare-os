@@ -727,10 +727,13 @@ export class LanguageModelGatekeeper
 @validateRpc()
 class LanguageModelBindingImpl extends RpcTarget implements LanguageModelBinding {
   #approvalQueue: RpcStub<ApprovalQueue>;
-  constructor(private env: Cloudflare.Env, private props: LanguageModelGatekeeperProps,
+  #env: Cloudflare.Env;
+  #props: LanguageModelGatekeeperProps;
+  constructor(env: Cloudflare.Env, props: LanguageModelGatekeeperProps,
       approvalQueue: RpcStub<ApprovalQueue>) {
     super();
     this.#approvalQueue = approvalQueue.dup();
+    this.#env = env; this.#props = props;
   }
 
   [Symbol.dispose]() { this.#approvalQueue[Symbol.dispose](); }
@@ -738,10 +741,10 @@ class LanguageModelBindingImpl extends RpcTarget implements LanguageModelBinding
   async run(options: {prompt: string, systemPrompt?: string}): Promise<string> {
     await this.#approvalQueue.authorizeObservation({title: "Run language model",
       description: "Generate a response using the connected language model."});
-    const run = deploymentUsageEnabled(this.env) ? await (this.#approvalQueue as RpcStub<ApprovalQueue & Required<Pick<ApprovalQueue, "getUsageBudget">>>).getUsageBudget() : undefined;
+    const run = deploymentUsageEnabled(this.#env) ? await (this.#approvalQueue as RpcStub<ApprovalQueue & Required<Pick<ApprovalQueue, "getUsageBudget">>>).getUsageBudget() : undefined;
     await using budget = run ? await UsageScope.open(run) : undefined;
-    const model = getModel(this.env, this.props.config, this.props.initiator,
-        {metadata: this.props.metadata, usageScope: budget});
+    const model = getModel(this.#env, this.#props.config, this.#props.initiator,
+        {metadata: this.#props.metadata, usageScope: budget});
     return await completeText(model, {
       prompt: options.prompt,
       systemPrompt: options.systemPrompt,
