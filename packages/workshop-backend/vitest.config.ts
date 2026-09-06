@@ -34,6 +34,7 @@ const textModules: Plugin = {
  * Overseer cost-persistence integration test without loading the full deployment configuration.
  */
 export default defineConfig({
+  resolve: { dedupe: ['@codemirror/state', '@codemirror/view', '@codemirror/language', '@lezer/common', '@lezer/highlight', '@lezer/lr'] },
   plugins: [
     textModules,
     capnwebValidate(),

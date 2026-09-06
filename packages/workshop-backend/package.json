@@ -57,6 +57,9 @@
     "typescript": "catalog:",
     "vitest": "catalog:",
     "world-atlas": "^2.0.2",
-    "wrangler": "catalog:"
+    "wrangler": "catalog:",
+    "@lezer/common": "^1.5.2",
+    "@lezer/highlight": "^1.2.3",
+    "@lezer/lr": "^1.4.10"
   }
 }

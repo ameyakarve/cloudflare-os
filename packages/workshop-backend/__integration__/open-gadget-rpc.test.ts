@@ -5,7 +5,7 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import {
   createOpenGadgetError,
   getOpenGadgetErrorCode,
@@ -13,6 +13,7 @@ import {
   type AuthenticatedApi,
   type OpenGadgetErrorCode,
   type PublicApi,
+  type WorkpieceSummary,
 } from "@gadgets/workshop-shared/api";
 import server from "../src/server";
 import { describe, expect, it } from "vitest";
@@ -260,6 +261,7 @@ describe("deployment-managed Ledger workspace", () => {
     const overseerDo = exports.OverseerDurableObject.get(workspaceId);
     using workspace = await overseerDo.open(userId, account.username, () => {});
     const source = new Y.Doc();
+    source.getMap<Y.Text>().set("client.js", new Y.Text("export default function App() { return null; }"));
     await overseerDo.initializeFromBlueprint(
       Y.encodeStateAsUpdateV2(source),
       "Ledger",
@@ -306,10 +308,20 @@ describe("deployment-managed Ledger workspace", () => {
     using secondary = await workspace.createGadget("Secondary");
     const secondaryId = await secondary.getId();
     const chatId = await workspace.newChat("Edit secondary", null);
-    const secondaryHead = (await workspace.listWorkpieces()).find(piece => piece.id === secondaryId);
+    const summaries = new Map<number, WorkpieceSummary>();
+    const ready = Promise.withResolvers<void>();
+    using _subscription = await workspace.subscribeToWorkpieces(new class extends RpcTarget {
+      entry(summary: WorkpieceSummary) { summaries.set(summary.id, summary); }
+      removed(id: number) { summaries.delete(id); }
+      ready() { ready.resolve(); }
+      // This test runs its client in workerd; native stubs forward this Cap'n Web hook.
+      onRpcBroken() {}
+    }());
+    await ready.promise;
+    const secondaryHead = summaries.get(secondaryId);
     if (secondaryHead?.type !== "gadget" || !secondaryHead.commitId) throw new Error("Secondary head missing");
     const submission = {
-      clientId: "managed-boundary", seq: 0, generation: 0, revision: 0,
+      clientId: "managed-boundary", seq: 1, generation: 0, revision: 0,
       pins: [{gadgetId: secondaryId, baseCommit: secondaryHead.commitId}],
       change: {[secondaryId]: [["client.js", {set: "export default function App() { return 'secondary'; }"}]]},
     } satisfies Parameters<typeof workspace.submitCodeChange>[1];
@@ -358,6 +370,7 @@ describe("deployment-managed Paths to Points holdings", () => {
     const overseerDo = exports.OverseerDurableObject.get(workspaceId);
     using workspace = await overseerDo.open(userId, account.username, () => {});
     const source = new Y.Doc();
+    source.getMap<Y.Text>().set("client.js", new Y.Text("export default function App() { return null; }"));
     await overseerDo.initializeFromBlueprint(
       Y.encodeStateAsUpdateV2(source),
       "Paths to Points",

@@ -8,6 +8,7 @@ const EXPECTED_OPEN_ERROR_CODES = new Set([
 ]);
 
 export default defineConfig({
+  resolve: { dedupe: ['@codemirror/state', '@codemirror/view', '@codemirror/language', '@lezer/common', '@lezer/highlight', '@lezer/lr'] },
   esbuild: {
     target: "es2022",
   },

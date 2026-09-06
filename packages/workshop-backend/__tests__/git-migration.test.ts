@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { AiChatMessage, BlueprintMetadata } from "@gadgets/workshop-shared/api";
 import { HISTORY_COMMIT_GAP_MS, migrateCodeLogToGit } from "../src/git-migration";
@@ -499,6 +499,32 @@ describe("migrateCodeLogToGit", () => {
     expect(await ws.convertedContent(91)).toEqual(new Map([
       [80, new Map([["app.js", "base\nagent\n"], ["new.js", "fresh\nuser\n"]])],
     ]));
+  });
+
+  it("recovers after interrupted commit writes without losing legacy content", async () => {
+    const ws = new LegacyWorkspace();
+    ws.addGadget(10, "APP");
+    ws.addChat(1);
+    ws.edit(T0 + MINUTE, doc => setFile(doc, "10", "app.js", "preserved"));
+    ws.addDraft(1, captureEdit(ws.docAt("current"), doc => setFile(doc, "10", "draft.js", "draft")));
+    const write = ws.gitStore.writeFilesAsCommit.bind(ws.gitStore);
+    let count = 0;
+    const interrupted = vi.spyOn(ws.gitStore, "writeFilesAsCommit").mockImplementation(async (...args) => {
+      const result = await write(...args);
+      if (++count === 2) throw new Error("simulated interruption after durable object write");
+      return result;
+    });
+    try {
+      await expect(migrateCodeLogToGit(ws.host())).rejects.toThrow("simulated interruption");
+    } finally {
+      interrupted.mockRestore();
+    }
+    await migrateCodeLogToGit(ws.host());
+    await expectHeadsMatchDoc(ws.storage, ws.gitStore, ws.docAt("current"));
+    expect(ws.conversionMessage(1).change).toBeDefined();
+    const converted = ws.conversionMessage(1);
+    await migrateCodeLogToGit(ws.host());
+    expect(ws.conversionMessage(1)).toEqual(converted);
   });
 
   it("is re-runnable, converging on the same commits and a single conversion", async () => {

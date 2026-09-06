@@ -71,6 +71,8 @@ export default defineConfig(({ mode }) => {
     // no such property, but the excess-property check doesn't reach spreads.
     ...runConfig,
     base: env.VITE_BASE_PATH?.trim() || '/',
+    // Shared editor extensions must use the same class instances as the app editor.
+    resolve: { dedupe: ['@codemirror/state', '@codemirror/view', '@codemirror/language', '@lezer/common', '@lezer/highlight', '@lezer/lr'] },
     plugins: [
       TanStackRouterVite({ target: 'react', autoCodeSplitting: true }),
       react(),

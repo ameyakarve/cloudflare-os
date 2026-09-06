@@ -28,6 +28,10 @@ catalog:
   wrangler: ^4.128.0
 
 overrides:
+  # Shared editor types cross the wrapper/submodule boundary; both installs must agree.
+  '@codemirror/state': 6.7.1
+  '@codemirror/view': 6.43.8
+  '@codemirror/language': 6.12.4
   # Keep the test pool's Wrangler/Miniflare/workerd stack aligned with the workspace toolchain.
   '@cloudflare/vitest-pool-workers>miniflare': 5.20260831.0-alpha
   '@cloudflare/vitest-pool-workers>wrangler': "catalog:"
