@@ -47,6 +47,10 @@
       "types": "./src/deployment-usage.ts",
       "import": "./src/deployment-usage.ts"
     },
+    "./specialists": {
+      "types": "./src/specialists.ts",
+      "import": "./src/specialists.ts"
+    },
     "./deployment-ledger": {
       "types": "./src/deployment-ledger.ts",
       "import": "./src/deployment-ledger.ts"

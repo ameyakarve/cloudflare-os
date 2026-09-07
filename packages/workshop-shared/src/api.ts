@@ -3020,6 +3020,27 @@ export type AiToolCall = {
   /** If the tool failed, the error. */
   error?: string;
 } & ({
+  /** Native coordinator delegation to a deployment-defined specialist. */
+  toolName: 'delegateSpecialist';
+  /** Selected profile/intent and bounded assigned task. */
+  input: {profileId: string; intentId: string; task: string};
+  /** Bounded serialized runtime-owned delegation record. */
+  output?: string;
+} | {
+  /** Bounded workspace execution-record discovery. */
+  toolName: 'listSpecialistRecords';
+  /** Optional exclusive cursor from the previous page. */
+  input: {before?: string};
+  /** At most twenty serialized record headers. */
+  output?: string;
+} | {
+  /** Read saved execution evidence without reviving its authority. */
+  toolName: 'readSpecialistRecord';
+  /** Workspace-local record identifier. */
+  input: {id: string};
+  /** Bounded serialized source/result record and current canonical action states. */
+  output?: string;
+} | {
   /**
    * Any workpiece can potentially export files. Gadgets, in particular, export their source code
    * as files, but other workpieces may export other filesystems. Hence, a file is identified by

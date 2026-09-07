@@ -1,3 +1,5 @@
+import type { SpecialistRecord } from '@gadgets/workshop-shared/specialists';
+import { parseSpecialists, specialistData, specialistOperation, SpecialistDispatcher, type SpecialistTools } from './specialists';
 import type { DeploymentLedgerApplication, LedgerEditorSession, LedgerHoldingsSession, LedgerApplicationQueue } from "@gadgets/workshop-shared/deployment-ledger";
 import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, isDeploymentUsageError, UsageScope } from "./deployment-usage.js";
 import type { DeploymentUsage, DeploymentUsageRun, UsageGrant } from "@gadgets/workshop-shared/deployment-usage";
@@ -93,8 +95,15 @@ import agent from "agent.js";
 
 export default class extends WorkerEntrypoint {
   verify() {}
-  async run(self, callbackResolvers, restoreForger) {
+  async run(self, callbackResolvers, restoreForger, specialist, allowed) {
     let env = this.env;
+    if (specialist) {
+      env = {};
+      for (const [binding, methods] of Object.entries(allowed)) {
+        env[binding] = Object.fromEntries(methods.map(method =>
+          [method, (...args) => specialist.invoke(binding, method, args)]));
+      }
+    }
     if (callbackResolvers) {
       for (let [index, {resolve, reject}] of Object.entries(callbackResolvers)) {
         env[index] = {
@@ -199,7 +208,9 @@ interface CodeModeEntrypoint extends WorkerEntrypoint {
         resolve: NativeRpcStub<(v: unknown) => void>,
         reject: NativeRpcStub<(e: unknown) => void>
       }>,
-      restoreForger?: NativeRpcStub<RestoreForgerImpl>): Promise<void>;
+      restoreForger?: NativeRpcStub<RestoreForgerImpl>,
+      specialist?: NativeRpcStub<SpecialistDispatcher>,
+      allowed?: Record<string, string[]>): Promise<void>;
 }
 
 interface RestoreForgerEntrypoint extends WorkerEntrypoint {
@@ -993,6 +1004,8 @@ type ExternalChatRecord = {
 };
 
 type ActiveAgentRecord = {
+  // Durable specialist root linkage, reused (never recreated) after a reset.
+  specialistRootId?: string;
   // Persisted before inference so a restart cannot reset the same turn's allowance or deadline.
   deploymentUsageRun?: UsageGrant;
   chatId: number;
@@ -1242,6 +1255,7 @@ export function makeOverseerStorage(storage: DurableObjectStorage) {
 
       nextActionId: 0,
       nextChatId: 0,
+      specialistRecordCount: 0,
       nextHookId: 0,
 
       // Permanent tombstones for deleted worktrees' workpiece ids, consulted only by the
@@ -1374,6 +1388,14 @@ export function makeOverseerStorage(storage: DurableObjectStorage) {
         uniqueIndexes: {
           byLastActive(meta: StoredChatMetadata) { return meta.lastActive.valueOf(); }
         }
+      }),
+
+      specialistRootCounts: collection<{id: string; count: number}>()({primaryKey: 'id'}),
+      specialistRecords: collection<SpecialistRecord>()({
+        primaryKey: 'id',
+        nonUniqueIndexes: {byRoot: (record: SpecialistRecord) => record.rootId},
+        uniqueIndexes: {unfinished: (record: SpecialistRecord) =>
+          record.status === 'prepared' || record.status === 'running' ? record.id : null},
       }),
 
       chatContext: collection<AiChatAgentContext>()({
@@ -1849,11 +1871,12 @@ class OverseerImpl implements AgentHooks {
   /** Begin a quota scope using the workspace owner's privately stored identity. */
   async newUsageScope(existing?: UsageGrant): Promise<UsageScope | undefined> {
     if (!deploymentUsageEnabled(this.env)) return undefined;
+    if (existing && existing.expiresAt <= Date.now()) throw new DeploymentUsageError('expired_run');
     await this.checkDeploymentAccess();
     if (!this.ownerId) throw new DeploymentUsageError();
     const run = await boundedUsage(this.users.get(this.users.idFromString(this.ownerId)).beginDeploymentUsageRun(existing?.runId));
     if (!run) throw new DeploymentUsageError();
-    return UsageScope.open(run);
+    return UsageScope.open(run, existing);
   }
 
   /** Share agent allowance with its tools; ordinary user operations receive a fresh bounded run. */
@@ -2040,6 +2063,17 @@ class OverseerImpl implements AgentHooks {
     // This migration is fully synchronous, so nothing can observe pre-migration state; the
     // git-storage migration below is the asynchronous one, shielded by blockConcurrencyWhile.
     this.#migrateStorage();
+    // An old in-flight record is evidence, never permission to replay a dispatch. This also
+    // covers orphan preparations whose root turn did not make it into activeAgents.
+    // Snapshot the index because each update removes the current entry from it.
+    const interruptedSpecialists = [...this.storage.specialistRecords.unfinished.list()];
+    for (const saved of interruptedSpecialists) {
+      this.#finishSpecialistRecord(saved, 'unknown', 'Interrupted by runtime restart; do not replay.');
+      if (saved.childChatId) {
+        const meta = this.storage.chatMeta.get(saved.childChatId);
+        if (meta) { delete meta.activeAgent; this.storage.chatMeta.put(meta); }
+      }
+    }
     this.defaultGadgetId = this.storage.defaultGadgetId.get();
 
     this.#autoApprovalDrainer = new AutoApprovalDrainer(
@@ -7222,6 +7256,9 @@ class OverseerImpl implements AgentHooks {
     let accessWatch: Disposable | undefined;
     let usageAbort: (() => void) | undefined;
     try {
+      if (this.getChatAgentContext(chatId).specialist) {
+        throw new Error('Specialist chats are immutable execution history. Send a new request to the coordinator.');
+      }
       const activeRecord = this.storage.activeAgents.get(chatId);
       liveChat.usageScope = await this.newUsageScope(activeRecord?.deploymentUsageRun);
       if (liveChat.usageScope) {
@@ -7291,6 +7328,7 @@ class OverseerImpl implements AgentHooks {
 
       let controller = liveChat.cancelController;
       controller.signal.throwIfAborted();
+      const specialistTools = this.specialistTools(chatId, aiModel, chosenModel, initiator, liveChat);
 
       let hasBeenNudged = false;
       let outcome: "ok" | "callbacks_stalled" = "ok";
@@ -7306,7 +7344,7 @@ class OverseerImpl implements AgentHooks {
               checkpoint,
               modelConfig: aiModel.config,
               measuredTokens: this.getChatMetaOrThrow(chatId).totalTokens ?? 0,
-            });
+            }, specialistTools);
         if (newCheckpoint) this.#commitChatCompaction(chatId, newCheckpoint);
         // `/compact` is done once it has compacted. An automatic compaction returned before
         // prompting the model, so rerun the turn now that the history is shorter. Each compaction
@@ -7366,6 +7404,10 @@ class OverseerImpl implements AgentHooks {
         durationMs: Date.now() - startedAt,
       });
     } catch (err: unknown) {
+      const rootId = this.storage.activeAgents.get(chatId)?.specialistRootId;
+      const root = rootId ? this.storage.specialistRecords.get(rootId) : undefined;
+      if (root?.status === 'running') this.#finishSpecialistRecord(root,
+        liveChat.cancelController.signal.aborted ? 'unknown' : 'failed', 'Coordinator turn interrupted.');
       // A failed model request surfaces as AgentTurnError (pi reports provider failures as data;
       // runAgent converts them back to a throw), carrying the failing request's HTTP status when
       // one was observed.
@@ -7407,6 +7449,18 @@ class OverseerImpl implements AgentHooks {
       }
       liveChat.activeAgentCallbacks.clear();
     } finally {
+      const rootId = this.storage.activeAgents.get(chatId)?.specialistRootId;
+      const rootRecord = rootId ? this.storage.specialistRecords.get(rootId) : undefined;
+      if (rootRecord?.status === 'running') {
+        const last = [...this.storage.chats.list({prefix: `${keyString(chatId)}.`, reverse: true, limit: 1})][0];
+        const records = [...this.storage.specialistRecords.byRoot.list({prefix: rootRecord.id})]
+          .filter(r => r.id !== rootRecord.id);
+        const uncertain = records.some(r => r.status === 'unknown' || r.status === 'prepared' || r.status === 'running');
+        this.#finishSpecialistRecord(rootRecord,
+          liveChat.cancelController.signal.aborted || uncertain ? 'unknown'
+            : records.some(r => r.status === 'pending-approval') ? 'pending-approval' : 'completed',
+          last?.type === 'message' ? last.message : undefined);
+      }
       accessWatch?.[Symbol.dispose]();
       if (usageAbort) liveChat.usageScope?.controller.signal.removeEventListener("abort", usageAbort);
       await liveChat.usageScope?.[Symbol.asyncDispose]();
@@ -7940,6 +7994,8 @@ class OverseerImpl implements AgentHooks {
   async prepareChatBindings(chatId: number, chatMessages: AiChatMessage[])
       : Promise<SeedBindingInfo[]> {
     let context = this.getChatAgentContext(chatId);
+    // Specialist sessions use a separate runtime membrane, not ambient seeds or migrations.
+    if (context.specialist) return [];
     let dirty = false;
 
     if (context.alwaysAvailableCapsuleIds === undefined) {
@@ -8874,12 +8930,231 @@ class OverseerImpl implements AgentHooks {
   #codeModeResolvers = new Map<string, (trace: TraceItem) => void>();
   #codeModeOutputSubscribers = new Map<string, (delta: string) => void>();
 
+  // These entries are deliberately transient. A reset revokes child authority, rather than
+  // reconstructing it from records and replaying potentially side-effecting code.
+  #specialistChildren = new Map<number, {
+    root: LiveChatContext; bindings: Record<string, WorkpieceId>;
+  }>();
+
+  #newSpecialistRecord(record: Omit<SpecialistRecord, 'id' | 'createdAt' | 'updatedAt'>): SpecialistRecord {
+    if ((record.source?.length ?? 0) > 32_768) throw new Error('Specialist source too large');
+    const now = Date.now();
+    const saved = {...record, id: `${now.toString(36).padStart(10, '0')}-${crypto.randomUUID()}`,
+      createdAt: now, updatedAt: now};
+    if (saved.kind === 'root') saved.rootId = saved.id;
+    // Admission must not deserialize the entire retained evidence store on every RPC.
+    this.storage.transaction(() => {
+      const total = this.storage.specialistRecordCount.get();
+      const count = this.storage.specialistRootCounts.get(saved.rootId)?.count ?? 0;
+      if (total >= 2000 || count >= 256) throw new Error('Saved specialist work limit reached');
+      this.storage.specialistRecords.put(saved);
+      this.storage.specialistRecordCount.put(total + 1);
+      this.storage.specialistRootCounts.put({id: saved.rootId, count: count + 1});
+    });
+    return saved;
+  }
+
+  #finishSpecialistRecord(record: SpecialistRecord, status: SpecialistRecord['status'], result?: string) {
+    record.status = status; record.updatedAt = Date.now();
+    if ((record.actionIds?.length ?? 0) > 128) {
+      record.actionIds = record.actionIds!.slice(0, 128);
+      record.actionIdsTruncated = true;
+      record.status = 'unknown';
+    }
+    if (result !== undefined) {
+      record.result = result.slice(0, 16_384); record.truncated = result.length > 16_384;
+    }
+    this.storage.specialistRecords.put(record);
+  }
+
+  /** In-process coordinator hooks; never an RPC interface or a child capability. */
+  specialistTools(chatId: number, aiModel: UserAiModelRecord,
+      model: import('./ai-models').ModelHandle, initiator: AiChatAuthorInfo,
+      liveChat: LiveChatContext): SpecialistTools | undefined {
+    const config = parseSpecialists(this.env.DEPLOYMENT_SPECIALISTS, this.env);
+    if (!config.profiles.length && ![...this.storage.specialistRecords.list({limit: 1})].length) return;
+    const active = this.storage.activeAgents.get(chatId);
+    let rootRecord = active?.specialistRootId ? this.storage.specialistRecords.get(active.specialistRootId) : undefined;
+    let busy = false;
+    return {
+      profiles: config.profiles,
+      list: before => {
+        if (before !== undefined && !/^[a-z0-9-]{1,80}$/.test(before)) throw new Error('Invalid cursor');
+        const rows = [...this.storage.specialistRecords.list({reverse: true, end: before, limit: 20})];
+        return JSON.stringify(rows.map(({source, result, bindings, ...header}) => header));
+      },
+      read: id => {
+        if (!/^[a-z0-9-]{1,80}$/.test(id)) throw new Error('Invalid record ID');
+        const saved = this.storage.specialistRecords.get(id);
+        if (!saved) throw new Error('No such workspace execution record');
+        const actions = saved.actionIds?.map(actionId => {
+          const action = this.storage.actions.get(actionId);
+          return {id: actionId, state: action?.state ?? 'unknown'};
+        });
+        return JSON.stringify({...saved, actions});
+      },
+      delegate: async (profileId, intentId, task, available) => {
+        liveChat.cancelController.signal.throwIfAborted();
+        const profile = config.profiles.find(p => p.id === profileId);
+        const intent = profile?.intents.find(i => i.id === intentId);
+        if (!profile || !intent || !task || task.length > 16_384) throw new Error('Invalid specialist task');
+        // Allocate lazily: a full evidence store must not prevent normal root tools or reads.
+        if (!rootRecord) {
+          const request = [...this.storage.chats.list({prefix: `${keyString(chatId)}.`, reverse: true, limit: 100})]
+            .find(m => m.type === 'message' && m.author.type !== 'agent');
+          rootRecord = this.#newSpecialistRecord({kind: 'root', rootId: crypto.randomUUID(), rootChatId: chatId,
+            source: request?.type === 'message' ? request.message.slice(0, 32_768) : undefined,
+            status: 'running', usageRunId: liveChat.usageScope?.grant.runId,
+            expiresAt: liveChat.usageScope?.grant.expiresAt});
+          if (active) { active.specialistRootId = rootRecord.id; this.storage.activeAgents.put(active); }
+        }
+        const previous = [...this.storage.specialistRecords.byRoot.list({prefix: rootRecord.id})];
+        if (busy || rootRecord.status === 'unknown' ||
+            previous.some(r => r.status === 'unknown' || r.status === 'pending-approval') ||
+            previous.filter(r => r.kind === 'delegation').length >= 8) {
+          throw new Error('Delegation blocked: busy, interrupted, awaiting approval, or root child limit reached');
+        }
+        // Only existing agent-visible gatekeeper sessions are eligible, never gadgets,
+        // spawners, worktrees, value bindings, or deployment-private managed UI sessions.
+        const bindings: Record<string, WorkpieceId> = {};
+        for (const name of Object.keys(intent.bindings)) {
+          const entry = available[name];
+          const gatekeeper = entry?.type === 'workpiece' ? this.storage.gatekeepers.get(entry.id) : undefined;
+          if (!gatekeeper || !exposeGatekeeperToAgent(gatekeeper) ||
+              (gatekeeper.creationSpec?.type !== 'ambient' && gatekeeper.creationSpec?.type !== 'gatekeeper') ||
+              entry?.type !== 'workpiece') {
+            throw new Error(`Specialist binding unavailable: ${name}`);
+          }
+          bindings[name] = entry.id;
+        }
+        const childChatId = this.nextChatId();
+        const record = this.#newSpecialistRecord({kind: 'delegation', rootId: rootRecord.id,
+          rootChatId: chatId, childChatId, parentId: rootRecord.id, status: 'prepared',
+          profileId, intentId, bindings: intent.bindings, source: task,
+          usageRunId: rootRecord.usageRunId, expiresAt: rootRecord.expiresAt});
+        busy = true;
+        const timestamp = this.getChatTimestamp();
+        this.storage.chatMeta.put({id: childChatId, title: profile.name, started: timestamp,
+          lastActive: timestamp, spawnerName: profile.name, activeAgent: aiModel.profile});
+        this.storage.chatContext.put({chatId: childChatId, bindings: {}, specialist: {
+          rootId: rootRecord.id, rootChatId: chatId, delegationId: record.id, profile, intent,
+        }});
+        this.addChatMessages(childChatId, initiator, [{type: 'message', message: task}]);
+        // Share the *same* model handle and allowance object. No beginRun/open/finish is called
+        // for a child, and its cancellation controller is the root controller.
+        this.#liveChats.set(childChatId, {cancelController: liveChat.cancelController,
+          activeAgentCallbacks: new Map(), pendingAgentCallbacks: [], usageScope: liveChat.usageScope});
+        this.#specialistChildren.set(childChatId, {root: liveChat, bindings});
+        // Child requests use the same charged stream but must not overwrite the root step's
+        // response metadata when its persistence barrier runs after this tool returns.
+        const rootResponse = model.lastResponse;
+        const deadline = setTimeout(() => liveChat.cancelController.abort(
+          new Error('Specialist time limit reached')), 120_000);
+        try {
+          this.#finishSpecialistRecord(record, 'running');
+          await runAgent(this, model, childChatId, aiModel.profile,
+            [...this.storage.chats.list({prefix: `${keyString(childChatId)}.`})],
+            liveChat.cancelController.signal, initiator, false,
+            {modelConfig: aiModel.config, measuredTokens: 0, checkpoint: undefined});
+          liveChat.cancelController.signal.throwIfAborted();
+          const records = [...this.storage.specialistRecords.byRoot.list({prefix: rootRecord.id})]
+            .filter(r => r.childChatId === childChatId);
+          record.actionIds = [...new Set(records.flatMap(r => r.actionIds ?? []))];
+          const pending = record.actionIds.some(id => this.storage.actions.get(id)?.state === 'pending');
+          const unknown = records.some(r => r.id !== record.id &&
+            (r.status === 'unknown' || r.status === 'prepared' || r.status === 'running'));
+          const last = [...this.storage.chats.list({prefix: `${keyString(childChatId)}.`, reverse: true, limit: 100})]
+            .find(m => m.type === 'message' && m.author.type === 'agent');
+          const finished = last?.type === 'message' && !last.toolCalls?.length;
+          this.#finishSpecialistRecord(record,
+            unknown ? 'unknown' : pending ? 'pending-approval' : finished ? 'completed' : 'failed',
+            finished ? last.message : 'Stopped without a final answer; inspect the saved code/call records.');
+        } catch (error) {
+          this.#finishSpecialistRecord(record, 'unknown', 'Child interrupted; inspect saved code/call records before any new attempt.');
+          throw error;
+        } finally {
+          clearTimeout(deadline);
+          model.lastResponse = rootResponse;
+          this.#specialistChildren.delete(childChatId);
+          this.#liveChats.delete(childChatId);
+          const meta = this.storage.chatMeta.get(childChatId);
+          if (meta) { delete meta.activeAgent; this.storage.chatMeta.put(meta); }
+          busy = false;
+        }
+        return JSON.stringify(record);
+      },
+    };
+  }
+
   async executeCodeMode(chatId: number, code: string,
                         initiator: AiChatAuthorInfo, initiatorModelId: string,
                         bindings: Record<string, ChatBindingEntry>,
                         onOutputText?: (delta: string) => void,
                         worktreeTurn?: WorktreeTurnAccess)
       : Promise<string> {
+    const specialist = this.getChatAgentContext(chatId).specialist;
+    const child = this.#specialistChildren.get(chatId);
+    if (specialist && !child) throw new Error('Specialist execution authority has expired');
+    let codeRecord: SpecialistRecord | undefined;
+    let dispatcher: SpecialistDispatcher | undefined;
+    const outstanding = new Set<SpecialistRecord>();
+    let unfinished = false;
+    const revoke = () => {
+      dispatcher?.[Symbol.dispose]();
+      for (const call of outstanding) {
+        unfinished = true;
+        call.actionIds = [...(this.#capturedActions.get(chatId)?.actions ?? [])];
+        this.#finishSpecialistRecord(call, 'unknown', 'Execution ended with unfinished RPC; do not replay.');
+      }
+      outstanding.clear();
+    };
+    if (specialist && child) {
+      child.root.cancelController.signal.throwIfAborted();
+      const existing = [...this.storage.specialistRecords.byRoot.list({prefix: specialist.rootId})];
+      if (existing.some(r => r.childChatId === chatId && (r.status === 'unknown' || r.status === 'pending-approval'))) {
+        throw new Error('Reconcile prior specialist work; do not replay');
+      }
+      codeRecord = this.#newSpecialistRecord({kind: 'code', rootId: specialist.rootId,
+        rootChatId: specialist.rootChatId, childChatId: chatId, parentId: specialist.delegationId,
+        status: 'prepared', profileId: specialist.profile.id, intentId: specialist.intent.id,
+        bindings: specialist.intent.bindings, source: code});
+      const parentId = codeRecord.id;
+      dispatcher = new SpecialistDispatcher(specialist.intent.bindings, child.root.cancelController.signal,
+        async (binding, method, args, assertLive) => {
+          if (this.#capturedActions.get(chatId)?.awaitDecision ||
+              [...this.storage.specialistRecords.byRoot.list({prefix: specialist.rootId})]
+                .some(r => r.childChatId === chatId && (r.status === 'unknown' || r.status === 'pending-approval'))) {
+            throw new Error('Reconcile prior work or await canonical approval');
+          }
+          const call = this.#newSpecialistRecord({kind: 'call', rootId: specialist.rootId,
+            rootChatId: specialist.rootChatId, childChatId: chatId, parentId,
+            profileId: specialist.profile.id, intentId: specialist.intent.id,
+            bindings: {[binding]: [method]}, status: 'prepared',
+            source: JSON.stringify(args), method: `${binding}.${method}`});
+          outstanding.add(call);
+          try {
+            const session = await this.startGatekeeperSession(
+              {type: 'gatekeeper', id: child.bindings[binding]}, {from: 'agent', chatId});
+            try {
+              // Session acquisition yields: revocation must be checked at the actual effect boundary.
+              assertLive();
+              this.#finishSpecialistRecord(call, 'running');
+              const raw = await session[method](...args);
+              let data: unknown;
+              try { assertLive(); data = specialistData(raw); }
+              finally { raw?.[Symbol.dispose]?.(); }
+              call.actionIds = [...(this.#capturedActions.get(chatId)?.actions ?? [])];
+              this.#finishSpecialistRecord(call,
+                this.#capturedActions.get(chatId)?.awaitDecision ? 'pending-approval' : 'completed', JSON.stringify(data));
+              return data;
+            } finally { session?.[Symbol.dispose]?.(); }
+          } catch (error) {
+            call.actionIds = [...(this.#capturedActions.get(chatId)?.actions ?? [])];
+            this.#finishSpecialistRecord(call, 'unknown', 'RPC failed or interrupted; effects may have occurred. Do not replay.');
+            throw error;
+          } finally { outstanding.delete(call); }
+        });
+    }
     let bytes = new Uint8Array(16);
     crypto.getRandomValues(bytes);
     let executionId: string = bytes.toBase64();
@@ -8922,19 +9197,24 @@ class OverseerImpl implements AgentHooks {
           "agent.js": code,
         },
         // The agent's env holds the chat's named bindings (see getEnvForAgent).
-        env: this.getEnvForAgent(chatId, bindings, executionId),
+        env: specialist ? {} : this.getEnvForAgent(chatId, bindings, executionId),
         tails: [this.ctx.exports.CodeModeTailLoopback({props: tailProps})],
         globalOutbound: null,
       };
 
-      let entrypoint = this.env.LOADER.load(workerDef).getEntrypoint<CodeModeEntrypoint>();
-
-      // First check the code actually starts up. Treat startup errors as total failures.
-      await entrypoint.verify();
+      const start = async () => {
+        const entrypoint = this.env.LOADER.load(workerDef).getEntrypoint<CodeModeEntrypoint>();
+        await entrypoint.verify();
+        return entrypoint;
+      };
+      // Include loader/getEntrypoint and verify (including top-level module evaluation).
+      const entrypoint = child
+        ? await specialistOperation(child.root.cancelController.signal, start)
+        : await start();
 
       // Create the `self` magic object that allows executed code to call back into this
       // chat thread. Uses the initiator's user ID for model resolution on callbacks.
-      let selfStub = this.ctx.exports.AgentSelfLoopback({props: {
+      let selfStub = specialist ? undefined : this.ctx.exports.AgentSelfLoopback({props: {
         overseerId: this.ctx.id.toString(),
         chatId,
         initiatorUserId: this.users.idFromName(initiator.id).toString(),
@@ -8965,8 +9245,21 @@ class OverseerImpl implements AgentHooks {
       try {
         // The forger is a transient stub argument, so the capability to forge persistent
         // gadget-restore stubs lives exactly as long as this run() call.
-        await entrypoint.run(selfStub, callbackResolvers,
-            new RestoreForgerImpl(this, chatId, bindings));
+        if (specialist && child && dispatcher && codeRecord) {
+          this.#finishSpecialistRecord(codeRecord, 'running');
+          const signal = child.root.cancelController.signal;
+          signal.throwIfAborted();
+          const activeDispatcher = dispatcher;
+          try {
+            await specialistOperation(signal, async () => {
+              await entrypoint.run(undefined, undefined, undefined,
+                activeDispatcher, specialist.intent.bindings);
+            });
+          } finally { revoke(); }
+        } else {
+          await entrypoint.run(selfStub, callbackResolvers,
+              new RestoreForgerImpl(this, chatId, bindings));
+        }
       } catch (err) {
         if (err instanceof Error && err.stack) {
           error = err.stack;
@@ -8975,6 +9268,11 @@ class OverseerImpl implements AgentHooks {
         }
         onOutputText?.(`\n\nUncaught exception: ${error}`);
       }
+
+      // Tail delivery may itself wait for detached RPCs. Never wait for logs on an
+      // interrupted run, nor mistake a returned function for completion of its effects.
+      child?.root.cancelController.signal.throwIfAborted();
+      if (unfinished) throw new Error('Execution ended with unfinished RPC; inspect saved records before any retry.');
 
       let timeout = scheduler.wait(5000).then(() => { return null; })
       let trace = await Promise.race([tracePromise, timeout])
@@ -8997,8 +9295,19 @@ class OverseerImpl implements AgentHooks {
         log = "(function succeeded with no output)";
       }
 
+      if (codeRecord) {
+        codeRecord.actionIds = [...(this.#capturedActions.get(chatId)?.actions ?? [])];
+        this.#finishSpecialistRecord(codeRecord,
+          error !== undefined || unfinished ? 'unknown' : this.#capturedActions.get(chatId)?.awaitDecision
+            ? 'pending-approval' : 'completed', log);
+      }
       return log;
     } finally {
+      revoke();
+      if (codeRecord && (codeRecord.status === 'prepared' || codeRecord.status === 'running')) {
+        codeRecord.actionIds = [...(this.#capturedActions.get(chatId)?.actions ?? [])];
+        this.#finishSpecialistRecord(codeRecord, 'unknown', 'Execution interrupted; no automatic replay.');
+      }
       // Guarded by executionId so this cleanup can never clobber a newer registration.
       if (this.#activeWorktreeTurns.get(chatId)?.executionId === executionId) {
         this.#activeWorktreeTurns.delete(chatId);
@@ -11798,6 +12107,8 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   // connection, or all awaited actions approved). Denials intentionally don't call this.
   async #resumeSuspendedAgent(chatId: number): Promise<void> {
     await this.impl.waitForChatMessagePreparation(chatId);
+    // Canonical action approval is not permission for fresh model dispatch or a new budget.
+    if (this.impl.getChatAgentContext(chatId).specialist) return;
     let meta = this.impl.storage.chatMeta.get(chatId);
     if (!meta) return;  // Chat deleted.
     if (meta.activeAgent) return;  // Already running; it'll pick up the change on its next read.

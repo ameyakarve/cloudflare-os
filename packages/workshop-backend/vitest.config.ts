@@ -41,6 +41,7 @@ export default defineConfig({
     cloudflareTest({
       main: './__tests__/deployment-identity-worker.ts',
       miniflare: {
+        workerLoaders: {LOADER: {}},
         serviceBindings: {MILESVAULT_LEDGER_APP: {name: "ledger-app-fixture", entrypoint: "LedgerApplication"}},
         workers: [{name: "ledger-app-fixture", modules: true, compatibilityDate: "2026-09-04",
           script: `

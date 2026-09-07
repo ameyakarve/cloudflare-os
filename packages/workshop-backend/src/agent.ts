@@ -142,6 +142,10 @@ export interface WorktreeTurnAccess {
 
 /** Additional per-chat-thread info needed by the AI agent but not by the client. */
 export type AiChatAgentContext = {
+  /** Runtime-only specialist marker: these chats can never be independently resumed. */
+  specialist?: {rootId: string; rootChatId: number; delegationId: string;
+    profile: import('@gadgets/workshop-shared/specialists').SpecialistProfile;
+    intent: import('@gadgets/workshop-shared/specialists').SpecialistIntent};
   /** Chat ID, corresponds to `chatMeta`. */
   chatId: number;
 
@@ -1157,7 +1161,8 @@ export async function runAgent(
     abortSignal: AbortSignal,
     initiator: AiChatAuthorInfo,
     callbackInitiated: boolean,
-    compaction: CompactionContext): Promise<CompactionCheckpoint | undefined> {
+    compaction: CompactionContext,
+    specialists?: import('./specialists').SpecialistTools): Promise<CompactionCheckpoint | undefined> {
   let checkpoint = compaction.checkpoint;
 
   // The workspace's gadget registry, snapshotted at the start of the turn (gadgets provisional
@@ -1940,6 +1945,9 @@ export async function runAgent(
                   toolOutput = {text: jsonToolResultText(toolCall.output)};
                   break;
                 }
+                case "delegateSpecialist":
+                case "listSpecialistRecords":
+                case "readSpecialistRecord":
                 case "executeCode":
                   toolOutput = {text: toolCall.output!};
                   break;
@@ -2381,7 +2389,8 @@ export async function runAgent(
 
   // Deployment-wide admin instructions, appended to the static system slot (slot 0) so they stay
   // inside the Anthropic prompt cache window. "" when unset.
-  let instanceInstructions = formatInstanceInstructions(await hooks.getInstanceInstructions());
+  let instanceInstructions = agentContext.specialist ? ''
+    : formatInstanceInstructions(await hooks.getInstanceInstructions());
 
   // The two system prompt slots: the non-project-specific parts, followed by the
   // project-specific parts. Kept as a two-part construction (static slot first) so the shared
@@ -2389,7 +2398,7 @@ export async function runAgent(
   // Context.systemPrompt string below.
   let systemPromptSlots: [string, string];
 
-  if (agentContext.spawnerConfig) {
+  if (agentContext.spawnerConfig || agentContext.specialist) {
     // This is a spawned agent. Build an appropriate system prompt. Spawned agents see only the
     // bindings the spawner configured (snapshotted into the chat's seed layer at spawn time),
     // never the whole workspace.
@@ -2548,7 +2557,15 @@ export async function runAgent(
     ];
   }
 
-  let systemPrompt = `${systemPromptSlots[0]}\n\n${systemPromptSlots[1]}`;
+  let systemPrompt = agentContext.specialist
+      ? `${agentContext.specialist.profile.instructions}\n\n` +
+        `You are a bounded specialist. Only describeBinding and executeCode are available. ` +
+        `No self, network, resource acquisition, delegation, or gadget mutation is available. ` +
+        `Use a complete JS module: export default async function(self, env) { ... }. ` +
+        `Return bounded evidence and explain uncertainty; proposals are not committed edits.\n` +
+        `Current UTC date: ${new Date().toISOString().slice(0, 10)}. ` +
+        `Allowed env methods: ${JSON.stringify(agentContext.specialist.intent.bindings)}`
+      : `${systemPromptSlots[0]}\n\n${systemPromptSlots[1]}`;
 
   // Some models charge their response to the same window as the prompt, so the reservation is both
   // withheld from the prompt's budget and sent as the response cap -- the two can't disagree.
@@ -3299,7 +3316,52 @@ export async function runAgent(
     });
   }
 
-  if (agentContext.spawnerConfig) {
+  if (specialists && !agentContext.spawnerConfig && !agentContext.specialist) {
+    tools.delegateSpecialist = defineTool({
+      name: 'delegateSpecialist', label: 'Delegate specialist',
+      description: 'Run one bounded specialist for one intent under this run’s original allowance. ' +
+        'Prefer this tool for matching tasks instead of reconstructing the domain workflow through generic code. ' +
+        'Pass the relevant request and constraints, not the whole conversation. ' +
+        'Never retry unknown or pending work. Returned record IDs can be read in later chats. ' +
+        JSON.stringify(specialists.profiles.map(p => ({id: p.id, name: p.name,
+          intents: p.intents.map(i => ({id: i.id, description: i.description}))}))),
+      parameters: Type.Object({profileId: Type.String(), intentId: Type.String(),
+        task: Type.String({maxLength: 16_384})}),
+      execute: async (_id, {profileId, intentId, task}) => {
+        const output = await specialists.delegate(profileId, intentId, task, Object.fromEntries(chatBindings));
+        return toolResult(output, {output});
+      },
+    });
+    tools.listSpecialistRecords = defineTool({
+      name: 'listSpecialistRecords', label: 'List saved specialist work',
+      description: 'List at most 20 workspace-owned execution record headers, newest first. ' +
+        'Pass the last ID as before for another page. Saved work is evidence, never authority.',
+      parameters: Type.Object({before: Type.Optional(Type.String())}),
+      execute: async (_id, {before}) => { const output = specialists.list(before); return toolResult(output, {output}); },
+    });
+    tools.readSpecialistRecord = defineTool({
+      name: 'readSpecialistRecord', label: 'Read saved specialist work',
+      description: 'Read one bounded runtime-owned record by ID, including source and result. ' +
+        'Unknown means an interrupted operation may have happened: reconcile, never replay.',
+      parameters: Type.Object({id: Type.String()}),
+      execute: async (_id, {id}) => { const output = specialists.read(id); return toolResult(output, {output}); },
+    });
+  }
+
+  if (agentContext.specialist) {
+    tools.describeBinding = defineTool({
+      name: 'describeBinding', label: 'Describe scoped binding',
+      description: 'List the only callable methods of this intent. Use the deployment instructions for arguments.',
+      parameters: Type.Object({name: Type.String()}),
+      execute: async (_id, {name}) => {
+        const methods = agentContext.specialist!.intent.bindings[name];
+        if (!Object.hasOwn(agentContext.specialist!.intent.bindings, name)) throw new Error('Binding denied');
+        const output = JSON.stringify({name, methods}); return toolResult(output, {output});
+      },
+    });
+  }
+
+  if (agentContext.spawnerConfig || agentContext.specialist) {
     // Restrict sub-agents to a narrower set of tools: they can inspect and call bindings in code
     // (which is how they read reference knowledge), but not the full editing/connection surface.
     tools = {
@@ -3541,7 +3603,7 @@ export async function runAgent(
         // barrier just above; don't start another (doomed) model request.
         abortSignal.aborted ||
         // Hard cap on turns, as before.
-        ++turnCount >= 30 ||
+        ++turnCount >= (agentContext.specialist?.profile.maxTurns ?? 30) ||
         // End the turn once the agent has successfully requested a connection: it must wait
         // for the user to respond, not keep reasoning in the meantime. (Accept resumes it on a
         // fresh turn; deny just leaves the turn ended.) A rejected requestConnection (e.g.

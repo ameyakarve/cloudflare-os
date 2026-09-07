@@ -66,6 +66,10 @@ declare global {
       DEPLOYMENT_ACCESS_REQUIRED?: string;
       DEPLOYMENT_USAGE_POLICY?: Service<import("@gadgets/workshop-shared/deployment-usage").DeploymentUsagePolicy>;
       DEPLOYMENT_USAGE_REQUIRED?: string;
+      /** Trusted versioned specialist JSON or @chunks:N manifest. Omit to disable delegation. */
+      DEPLOYMENT_SPECIALISTS?: string;
+      /** Manifest chunks, each at most 4,000 UTF-8 bytes; indices 0 through N-1 (N <= 16). */
+      [key: `DEPLOYMENT_SPECIALISTS_${number}`]: string | undefined;
       CF_ACCESS_ISS?: string;   // team URL, e.g. https://<team>.cloudflareaccess.com
 
       // Comma-separated allowlist of gatekeeper vendor ids permitted to drive sign-in (e.g.

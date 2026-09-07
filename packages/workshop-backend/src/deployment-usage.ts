@@ -93,11 +93,14 @@ export class UsageScope implements AsyncDisposable {
     this.#timer = setTimeout(() => this.controller.abort(new DeploymentUsageError("expired_run")),
         Math.max(0, grant.expiresAt - Date.now()));
   }
-  static async open(run: RpcStub<DeploymentUsageRun>): Promise<UsageScope> {
+  static async open(run: RpcStub<DeploymentUsageRun>, expected?: UsageGrant): Promise<UsageScope> {
     try {
       const grant = await boundedUsage(run.getGrant());
       if (!grant || grant.allowed !== true || !Number.isSafeInteger(grant.expiresAt) ||
-          grant.expiresAt <= Date.now() || grant.expiresAt > Date.now() + 900_000) throw new DeploymentUsageError();
+          grant.expiresAt <= Date.now() || grant.expiresAt > Date.now() + 900_000 ||
+          (expected && (grant.runId !== expected.runId || grant.expiresAt !== expected.expiresAt))) {
+        throw new DeploymentUsageError('expired_run');
+      }
       return new UsageScope(run, grant);
     } catch (error) { run[Symbol.dispose](); throw error; }
   }
