@@ -4,7 +4,7 @@ import { applyCodeChange, codeChangeSerializedSize, replaceSpanChange, type Code
 import { PDF_MIME_TYPE, modelApiSupportsPdfAttachments } from './chat-attachment-pdf';
 import { AgentCatalog, ObservationDescription } from '@gadgets/workshop-shared/gatekeeper';
 import { createWorkshopLogger } from "./observability";
-import { Type } from "@earendil-works/pi-ai";
+import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type {
   AssistantMessage, ImageContent, Message, TSchema, TextContent, ThinkingContent, ToolCall,
 } from "@earendil-works/pi-ai";
@@ -1163,6 +1163,11 @@ export async function runAgent(
     callbackInitiated: boolean,
     compaction: CompactionContext,
     specialists?: import('./specialists').SpecialistTools): Promise<CompactionCheckpoint | undefined> {
+  // A resumed run must not regain selection attempts, even through compaction inference.
+  if (specialists?.selectionExhausted) {
+    abortSignal.throwIfAborted();
+    return undefined;
+  }
   let checkpoint = compaction.checkpoint;
 
   // The workspace's gadget registry, snapshotted at the start of the turn (gadgets provisional
@@ -3317,16 +3322,41 @@ export async function runAgent(
   }
 
   if (specialists && !agentContext.spawnerConfig && !agentContext.specialist) {
-    tools.delegateSpecialist = defineTool({
+    const pairs = specialists.profiles.flatMap(p => p.intents.map(i => ({
+      profileId: p.id, intentId: i.id, description: i.description,
+    })));
+    const routing = 'For a task matching a deployment specialist intent, use delegateSpecialist with ' +
+      'the exact advertised profileId/intentId pair. profileId identifies a deployment specialist, ' +
+      'not a user, account, or workspace; intentId identifies an intent within that profile. ' +
+      'Never guess IDs. At most two invalid selections are allowed per originating run. ' +
+      'After a specialist failure, do not use generic tools to reconstruct the failed specialist workflow; ' +
+      'report the blocker or inspect saved records. Never retry unknown or pending work. ' +
+      'Available profileId/intentId pairs: ' + JSON.stringify(pairs);
+    systemPrompt += '\n\n' + routing;
+    // With only historical records, keep reads available but advertise no empty enum tool.
+    if (pairs.length) tools.delegateSpecialist = defineTool({
       name: 'delegateSpecialist', label: 'Delegate specialist',
-      description: 'Run one bounded specialist for one intent under this run’s original allowance. ' +
-        'Prefer this tool for matching tasks instead of reconstructing the domain workflow through generic code. ' +
-        'Pass the relevant request and constraints, not the whole conversation. ' +
-        'Never retry unknown or pending work. Returned record IDs can be read in later chats. ' +
-        JSON.stringify(specialists.profiles.map(p => ({id: p.id, name: p.name,
-          intents: p.intents.map(i => ({id: i.id, description: i.description}))}))),
-      parameters: Type.Object({profileId: Type.String(), intentId: Type.String(),
-        task: Type.String({maxLength: 16_384})}),
+      description: 'Run one bounded specialist under this run’s original allowance. ' +
+        'Pass the relevant request and constraints, not the whole conversation. ' + routing,
+      parameters: Type.Object({
+        profileId: StringEnum(specialists.profiles.map(p => p.id), {
+          description: 'Deployment specialist ID, not a user, account, or workspace ID. Use an advertised pair.',
+        }),
+        intentId: StringEnum([...new Set(pairs.map(p => p.intentId))], {
+          description: 'Intent ID within the selected deployment specialist profile; must match an advertised pair.',
+        }),
+        task: Type.String({minLength: 1, maxLength: 16_384}),
+      }),
+      // pi calls this before schema validation. Otherwise invalid enum values never reach our
+      // actionable errors or durable selection counter. Do not coerce or repair guessed IDs.
+      prepareArguments: args => {
+        const input = args && typeof args === 'object' ? args as Record<string, unknown> : {};
+        const pair = specialists.validateSelection(input.profileId, input.intentId);
+        if (typeof input.task !== 'string' || !input.task.trim() || input.task.length > 16_384) {
+          throw new Error('Invalid specialist task: provide a non-blank request of at most 16384 characters.');
+        }
+        return {...pair, task: input.task};
+      },
       execute: async (_id, {profileId, intentId, task}) => {
         const output = await specialists.delegate(profileId, intentId, task, Object.fromEntries(chatBindings));
         return toolResult(output, {output});
@@ -3597,11 +3627,14 @@ export async function runAgent(
     // Replay already produces LLM-shaped messages; no custom message types exist.
     convertToLlm: (messages) => messages as Message[],
     toolExecution: "sequential",
+    beforeToolCall: async () => specialists?.selectionExhausted
+      ? {block: true, reason: 'Specialist selection limit reached; stop this run. No generic fallback.'}
+      : undefined,
     maxTokens: maxOutputTokens,
     shouldStopAfterTurn: () =>
         // Cancelled during tool execution: the completed turn was persisted by the turn_end
         // barrier just above; don't start another (doomed) model request.
-        abortSignal.aborted ||
+        abortSignal.aborted || specialists?.selectionExhausted === true ||
         // Hard cap on turns, as before.
         ++turnCount >= (agentContext.specialist?.profile.maxTurns ?? 30) ||
         // End the turn once the agent has successfully requested a connection: it must wait

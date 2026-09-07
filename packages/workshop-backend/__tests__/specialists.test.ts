@@ -6,6 +6,7 @@ import type { DeploymentSpecialists, SpecialistRecord } from '@gadgets/workshop-
 import type { OverseerDurableObject } from '../src/overseer';
 import type { ModelHandle } from '../src/ai-models';
 import { zeroUsage } from '../src/ai-invoke';
+import { runAgent } from '../src/agent';
 import { UsageScope } from '../src/deployment-usage';
 import type { DeploymentUsage, DeploymentUsageRun, UsageGrant } from '@gadgets/workshop-shared/deployment-usage';
 
@@ -197,6 +198,119 @@ function fakeModel(inspect: (context: Parameters<ModelHandle['stream']>[1]) => v
       stream.push({type: 'done', reason: message.stopReason as 'stop' | 'toolUse', message}); stream.end(); return stream;
     }};
 }
+
+// Deterministic contract regression, not a claim about any paid model's routing behavior.
+it.each(['discover', 'profile', 'intent', 'unknown-intent', 'task', 'limit'] as const)(
+    'routes a real coordinator loop using advertised pairs and %s feedback', async mode => {
+  const stub = env.TEST_OVERSEER.getByName(crypto.randomUUID());
+  await runInDurableObject(stub, async (instance: OverseerDurableObject) => {
+    const impl = instance['impl'];
+    const request = 'Compare cards for a market and spending category';
+    impl.env.DEPLOYMENT_SPECIALISTS = JSON.stringify({version: 1, profiles: [
+      {id: 'card-advice', name: 'Card advice', instructions: 'Return a bounded comparison.', maxTurns: 2,
+        intents: [{id: 'market-category', description: request, bindings: {}}]},
+      config.profiles[0],
+    ]});
+    impl.getInstanceInstructions = async () => '';
+    const chatId = impl.nextChatId();
+    impl.storage.chatMeta.put({id: chatId, title: 'Root', started: new Date(), lastActive: new Date()});
+    const author = {type: 'user' as const, id: 'fixture@example.com', name: 'Fixture'};
+    const aiModel = {profile: {type: 'agent' as const, id: 'fixture', name: 'Fixture'},
+      config: {provider: 'openai' as const, model: 'gpt-4.1', apiToken: 'never-used'}};
+    impl.storage.activeAgents.put({chatId, initiatorUserId: 'fixture', modelId: 'fixture',
+      initiator: author, callbackInitiated: false});
+    impl.addChatMessages(chatId, author, [{type: 'message', message: request}]);
+    const messages = [...impl.storage.chats.list()];
+    const live = {cancelController: new AbortController(), activeAgentCallbacks: new Map(), pendingAgentCallbacks: []};
+    let rootCalls = 0;
+    let childCalls = 0;
+    const model = fakeModel(context => {
+      const tool = context.tools?.find(t => t.name === 'delegateSpecialist');
+      if (!tool) {
+        childCalls++;
+        expect(context.tools?.map(t => t.name).toSorted()).toEqual(['describeBinding', 'executeCode']);
+        return;
+      }
+      rootCalls++;
+      // Inspect the JSON-serializable schema actually reaching ModelHandle.stream, not a hand-built tool.
+      const schema = JSON.parse(JSON.stringify(tool.parameters));
+      expect(schema.properties.profileId).toMatchObject({type: 'string', enum: ['card-advice', 'research']});
+      expect(schema.properties.intentId).toMatchObject({type: 'string', enum: ['market-category', 'read']});
+      expect(schema.properties.profileId.description).toContain('not a user, account, or workspace');
+      expect(schema.properties.intentId.description).toContain('within the selected deployment specialist');
+      const pairs: {profileId: string; intentId: string; description: string}[] =
+        JSON.parse(tool.description.split('Available profileId/intentId pairs: ')[1]);
+      const pair = pairs.find(p => p.description === request)!;
+      expect(pair).toMatchObject({profileId: 'card-advice', intentId: 'market-category'});
+      expect(context.systemPrompt).toContain(JSON.stringify(pairs));
+      expect(context.systemPrompt).toContain('do not use generic tools to reconstruct');
+      expect(schema.properties.profileId.enum).toContain(pair.profileId);
+      expect(schema.properties.intentId.enum).toContain(pair.intentId);
+      const result = context.messages.findLast(m => m.role === 'toolResult');
+      if (result) {
+        const feedback = JSON.stringify(result);
+        if (rootCalls === 2 && mode !== 'discover') {
+          expect(result).toHaveProperty('isError', true);
+          if (mode === 'profile' || mode === 'limit') {
+            expect(feedback).toContain('Allowed deployment specialist profile IDs: card-advice, research');
+            expect(feedback).not.toContain('Invalid specialist task');
+          } else if (mode === 'intent' || mode === 'unknown-intent') {
+            expect(feedback).toContain('Allowed intents: market-category');
+            expect(feedback).not.toContain('Invalid specialist task');
+          } else expect(feedback).toContain('Invalid specialist task:');
+        } else {
+          expect(result).toHaveProperty('isError', false);
+          return;
+        }
+      }
+      let args = {profileId: pair.profileId, intentId: pair.intentId, task: request};
+      if (rootCalls === 1) {
+        if (mode === 'profile' || mode === 'limit') args.profileId = 'default';
+        if (mode === 'intent') args.intentId = 'read'; // Valid enum, wrong profile/intent pair.
+        if (mode === 'unknown-intent') args.intentId = 'default';
+        if (mode === 'task') args.task = ' ';
+      } else if (mode === 'limit') args.profileId = 'main';
+      return [{type: 'toolCall', id: `delegate-${rootCalls}`, name: 'delegateSpecialist', arguments: args},
+        ...(mode === 'limit' && rootCalls === 2 ? [{type: 'toolCall' as const, id: 'fallback',
+          name: 'executeCode', arguments: {code: 'export default () => { throw new Error("must not run") }'}}] : [])];
+    });
+    const tools = impl.specialistTools(chatId, aiModel, model, author, live)!;
+    await runAgent(impl, model, chatId, aiModel.profile, messages, live.cancelController.signal, author, false,
+      {modelConfig: aiModel.config, measuredTokens: 0, checkpoint: undefined}, tools);
+    const records = [...impl.storage.specialistRecords.list()];
+    if (mode === 'limit') {
+      expect(rootCalls).toBe(2);
+      expect(childCalls).toBe(0);
+      expect(records).toEqual([]);
+      expect(impl.storage.activeAgents.get(chatId)?.specialistSelectionErrors).toBe(2);
+      expect(JSON.stringify([...impl.storage.chats.list()])).toContain('No generic fallback');
+      // Recreating both the live context and tools models a resume; the durable count wins.
+      const resumedLive = {...live, cancelController: new AbortController()};
+      const resumed = impl.specialistTools(chatId, aiModel, model, author, resumedLive)!;
+      expect(resumed.selectionExhausted).toBe(true);
+      await expect(resumed.delegate('card-advice', 'market-category', request, {})).rejects.toThrow('limit reached');
+      await runAgent(impl, model, chatId, aiModel.profile, messages, resumedLive.cancelController.signal, author, false,
+        {modelConfig: aiModel.config, measuredTokens: 0, checkpoint: undefined}, resumed);
+      expect(rootCalls).toBe(2);
+      // A genuinely new originating run in the same chat does not inherit the old live count.
+      impl.storage.activeAgents.put({chatId, initiatorUserId: 'fixture', modelId: 'fixture',
+        initiator: author, callbackInitiated: false});
+      const nextRun = impl.specialistTools(chatId, aiModel, model, author, live)!;
+      expect(nextRun.selectionExhausted).toBe(false);
+      expect(nextRun.validateSelection('card-advice', 'market-category')).toEqual({
+        profileId: 'card-advice', intentId: 'market-category',
+      });
+    } else {
+      expect(rootCalls).toBe(mode === 'discover' ? 2 : 3);
+      expect(childCalls).toBe(1);
+      expect(records.filter(r => r.kind === 'delegation')).toMatchObject([
+        {profileId: 'card-advice', intentId: 'market-category', source: request, status: 'completed'},
+      ]);
+      expect(impl.storage.activeAgents.get(chatId)?.specialistSelectionErrors ?? 0)
+        .toBe(mode === 'profile' || mode === 'intent' || mode === 'unknown-intent' ? 1 : 0);
+    }
+  });
+});
 
 it.each(['answer', 'code', 'ambiguous', 'approval', 'native', 'detached-session', 'detached-running', 'startup', 'cancel-running', 'loader-startup', 'loader-get-cancel'] as const)(
     'runs a real %s child loop with durable linkage and restricted tools', async mode => {

@@ -152,6 +152,10 @@ export class SpecialistDispatcher extends RpcTarget {
 /** In-process coordinator tools, never exported as a capability to child code. */
 export interface SpecialistTools {
   profiles: SpecialistProfile[];
+  /** Validate before SDK schema validation, without allocating work or authority. */
+  validateSelection(profileId: unknown, intentId: unknown): {profileId: string; intentId: string};
+  /** Two invalid selections end the originating run, including after a resume. */
+  readonly selectionExhausted: boolean;
   delegate(profileId: string, intentId: string, task: string,
     bindings: Record<string, import('./agent').ChatBindingEntry>): Promise<string>;
   list(before?: string): string;

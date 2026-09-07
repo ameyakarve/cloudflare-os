@@ -314,6 +314,7 @@ class RestoreForgerImpl extends NativeRpcTarget {
 
 // Per-chat in-memory state, used while an agent is running or agent callbacks are pending.
 type LiveChatContext = {
+  specialistSelectionErrors?: number;
   usageScope?: UsageScope;
   // Abort controller for the running agent (if any).
   cancelController: AbortController;
@@ -1006,6 +1007,8 @@ type ExternalChatRecord = {
 type ActiveAgentRecord = {
   // Durable specialist root linkage, reused (never recreated) after a reset.
   specialistRootId?: string;
+  // Invalid selections consume a run-local correction allowance, even before a root is allocated.
+  specialistSelectionErrors?: number;
   // Persisted before inference so a restart cannot reset the same turn's allowance or deadline.
   deploymentUsageRun?: UsageGrant;
   chatId: number;
@@ -8976,8 +8979,36 @@ class OverseerImpl implements AgentHooks {
     const active = this.storage.activeAgents.get(chatId);
     let rootRecord = active?.specialistRootId ? this.storage.specialistRecords.get(active.specialistRootId) : undefined;
     let busy = false;
+    // An active record is authoritative even when its count is absent (a new originating run).
+    const selectionErrors = () => (this.storage.activeAgents.get(chatId) ?? liveChat).specialistSelectionErrors ?? 0;
+    const selectionExhausted = () => selectionErrors() >= 2;
+    const stopped = 'Specialist selection limit reached for this originating run. Stop; do not reconstruct ' +
+      'the failed specialist workflow with generic tools or request a fresh allowance.';
+    const validateSelection = (profileId: unknown, intentId: unknown) => {
+      liveChat.cancelController.signal.throwIfAborted();
+      if (selectionExhausted()) throw new Error(stopped);
+      const profile = config.profiles.find(p => p.id === profileId);
+      const intent = profile?.intents.find(i => i.id === intentId);
+      const error = !profile
+        ? `Invalid specialist profileId. Allowed deployment specialist profile IDs: ${config.profiles.map(p => p.id).join(', ') || '(none)'}. ` +
+          'profileId is not a user, account, or workspace ID.'
+        : !intent
+          ? `Invalid specialist intentId for profileId="${profile.id}". Allowed intents: ${profile.intents.map(i => i.id).join(', ')}.`
+          : undefined;
+      if (error) {
+        const count = selectionErrors() + 1;
+        liveChat.specialistSelectionErrors = count;
+        const current = this.storage.activeAgents.get(chatId);
+        if (current) { current.specialistSelectionErrors = count; this.storage.activeAgents.put(current); }
+        throw new Error(`${error} ${selectionExhausted() ? stopped :
+          'One selection correction remains; use an advertised profileId/intentId pair, never guess. Do not reconstruct the failed specialist workflow with generic tools.'}`);
+      }
+      return {profileId: profile!.id, intentId: intent!.id};
+    };
     return {
       profiles: config.profiles,
+      validateSelection,
+      get selectionExhausted() { return selectionExhausted(); },
       list: before => {
         if (before !== undefined && !/^[a-z0-9-]{1,80}$/.test(before)) throw new Error('Invalid cursor');
         const rows = [...this.storage.specialistRecords.list({reverse: true, end: before, limit: 20})];
@@ -8994,10 +9025,12 @@ class OverseerImpl implements AgentHooks {
         return JSON.stringify({...saved, actions});
       },
       delegate: async (profileId, intentId, task, available) => {
-        liveChat.cancelController.signal.throwIfAborted();
-        const profile = config.profiles.find(p => p.id === profileId);
-        const intent = profile?.intents.find(i => i.id === intentId);
-        if (!profile || !intent || !task || task.length > 16_384) throw new Error('Invalid specialist task');
+        validateSelection(profileId, intentId);
+        const profile = config.profiles.find(p => p.id === profileId)!;
+        const intent = profile.intents.find(i => i.id === intentId)!;
+        if (typeof task !== 'string' || !task.trim() || task.length > 16_384) {
+          throw new Error('Invalid specialist task: provide a non-blank request of at most 16384 characters.');
+        }
         // Allocate lazily: a full evidence store must not prevent normal root tools or reads.
         if (!rootRecord) {
           const request = [...this.storage.chats.list({prefix: `${keyString(chatId)}.`, reverse: true, limit: 100})]
@@ -9006,7 +9039,8 @@ class OverseerImpl implements AgentHooks {
             source: request?.type === 'message' ? request.message.slice(0, 32_768) : undefined,
             status: 'running', usageRunId: liveChat.usageScope?.grant.runId,
             expiresAt: liveChat.usageScope?.grant.expiresAt});
-          if (active) { active.specialistRootId = rootRecord.id; this.storage.activeAgents.put(active); }
+          const current = this.storage.activeAgents.get(chatId);
+          if (current) { current.specialistRootId = rootRecord.id; this.storage.activeAgents.put(current); }
         }
         const previous = [...this.storage.specialistRecords.byRoot.list({prefix: rootRecord.id})];
         if (busy || rootRecord.status === 'unknown' ||
