@@ -587,6 +587,9 @@ function getToolCallSummary(
     }
     case "createWorktree":
       return { verb: "Created worktree", target: tc.input.title };
+    case 'delegateSpecialist': return {verb: 'Delegated specialist', target: tc.input.profileId};
+    case 'listSpecialistRecords': return {verb: 'Listed saved specialist work'};
+    case 'readSpecialistRecord': return {verb: 'Read saved specialist work', target: tc.input.id};
     case "executeCode": {
       // Prefer the first non-empty line as a preview. `code` may be absent while the tool call's
       // input is still streaming in, so guard against undefined.
@@ -671,6 +674,9 @@ function describeObservationCount(count: number): string {
 
 function describeToolCallCount(toolName: AiToolCall["toolName"], count: number): string {
   switch (toolName) {
+    case 'delegateSpecialist': return `Delegated ${pluralize(count, 'specialist')}`;
+    case 'listSpecialistRecords': return 'Listed saved specialist work';
+    case 'readSpecialistRecord': return `Read ${pluralize(count, 'execution record')}`;
     case "readFile":
       return `Read ${pluralize(count, "file")}`;
     case "writeFile":
@@ -785,6 +791,9 @@ function getToolTarget(tc: AiToolCall): string | undefined {
 // Present-tense verb for an in-progress tool call.
 function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
   switch (toolName) {
+    case 'delegateSpecialist': return 'Delegating specialist';
+    case 'listSpecialistRecords': return 'Listing saved specialist work';
+    case 'readSpecialistRecord': return 'Reading saved specialist work';
     case "readFile": return "Reading";
     case "writeFile": return "Writing";
     case "editFile": return "Editing";
@@ -810,6 +819,9 @@ function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
 function describeProvisionalToolCount(toolName: AiToolCall["toolName"], count: number): string {
   if (count <= 1) return getProvisionalToolLabel(toolName);
   switch (toolName) {
+    case 'delegateSpecialist': return `Delegating ${pluralize(count, 'specialist')}`;
+    case 'listSpecialistRecords': return 'Listing saved specialist work';
+    case 'readSpecialistRecord': return `Reading ${pluralize(count, 'execution record')}`;
     case "readFile": return `Reading ${pluralize(count, "file")}`;
     case "writeFile": return `Writing ${pluralize(count, "file")}`;
     case "editFile": return `Making ${count} edits`;
