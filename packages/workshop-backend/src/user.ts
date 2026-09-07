@@ -341,7 +341,9 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
    * exist and `allowCreate` is false (deployment signups are closed), refuses rather than creating —
    * existing users can still sign in.
    */
-  async authenticateFromCfAccess(email: string, allowCreate: boolean): Promise<boolean> {
+  async authenticateFromCfAccess(email: string, allowCreate: boolean, verifiedName?: string): Promise<boolean> {
+    // eslint-disable-next-line no-control-regex -- Strip control characters from display metadata.
+    const name = verifiedName && Array.from(verifiedName.replace(/[\u0000-\u001f\u007f]/g, ' ').trim()).slice(0, 200).join('');
     if (!this.storage.created.get()) {
       if (!allowCreate) {
         throw new Error("New sign-ups are currently disabled on this deployment.");
@@ -350,12 +352,14 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       this.storage.created.put(true);
       this.storage.profile.put({
         type: "user",
-        name: email.split("@")[0],
+        name: name || email.split("@")[0],
         id: email,
       });
       return true;
     }
-
+    // Upgrade legacy email-derived defaults without replacing a customized name.
+    const profile = this.storage.profile.get();
+    if (name && profile.name === email.split('@')[0]) this.storage.profile.put({ ...profile, name });
     return false;
   }
 
@@ -597,7 +601,21 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     this.storage.profile.put(profile);
   }
 
+  #managedAgentModel(): UserAiModelRecord | undefined {
+    const id = this.env.DEPLOYMENT_AGENT_MODEL_ID;
+    if (!id) return undefined;
+    const model = getAiGatewayConfig(this.env)?.resolveModel(id);
+    if (!model) throw new Error('The deployment agent model is unavailable. Contact the administrator.');
+    return model;
+  }
+
+  #assertUserModelSelection(): void {
+    if (this.env.DEPLOYMENT_AGENT_MODEL_ID) throw new Error('Agent models are managed by the deployment.');
+  }
+
   async listModels(): Promise<AiChatAuthorInfo[]> {
+    const managed = this.#managedAgentModel();
+    if (managed) return [managed.profile];
     let result: AiChatAuthorInfo[] = [];
 
     // When AI Gateway mode is active, include all suggested models for enabled providers.
@@ -620,6 +638,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async addModel(profile: AiChatAuthorInfo, config: AiModelConfig): Promise<void> {
+    this.#assertUserModelSelection();
     let gwConfig = getAiGatewayConfig(this.env);
     if (gwConfig && !gwConfig.providers.has(config.provider)) {
       throw new Error(`Provider "${config.provider}" is not available in AI Gateway mode.`);
@@ -630,6 +649,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async deleteModel(id: string): Promise<void> {
+    this.#assertUserModelSelection();
     // In AI Gateway mode, don't allow deleting built-in suggested models.
     let gwConfig = getAiGatewayConfig(this.env);
     if (gwConfig) {
@@ -644,10 +664,12 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async setQuickModel(id: string | null): Promise<void> {
+    this.#assertUserModelSelection();
     this.storage.quickModel.put(id);
   }
 
   async getQuickModel(): Promise<null | string> {
+    if (this.env.DEPLOYMENT_AGENT_MODEL_ID) return getAiGatewayConfig(this.env)?.getQuickModelConfig()?.model ?? null;
     let result = this.storage.quickModel.get();
     if (result && this.storage.aiModels.get(result)) {
       return result;
@@ -657,10 +679,11 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   async getPreferredModel(): Promise<string | null> {
-    return this.storage.preferredModel.get();
+    return this.env.DEPLOYMENT_AGENT_MODEL_ID || this.storage.preferredModel.get();
   }
 
   async setPreferredModel(id: string | null): Promise<void> {
+    this.#assertUserModelSelection();
     if (id !== null) {
       // Validate that the model exists in the user's configured models or as a gateway model.
       let gwConfig = getAiGatewayConfig(this.env);
@@ -767,6 +790,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
    * via retryOnDoReset, so it must stay free of writes and side effects. */
   async getChatContext(modelId: string | null): Promise<UserChatContext> {
     let gwConfig = getAiGatewayConfig(this.env);
+    const managed = this.#managedAgentModel();
+    if (managed) return { profile: this.storage.profile.get(), aiModel: managed, quickModel: gwConfig!.getQuickModelConfig() };
 
     let result: UserChatContext = {
       profile: this.storage.profile.get()

@@ -1,3 +1,4 @@
+import { useServerConfig } from '../ServerConfigContext'
 import { useNavigate } from '@tanstack/react-router'
 import { DropdownMenu } from '@cloudflare/kumo'
 import { useAuthenticatedApi } from '../AuthContext'
@@ -7,6 +8,7 @@ import { MENU_CONTENT, MENU_ITEM, MENU_ITEM_DANGER, MENU_POSITIONER_STYLE } from
 export default function UserMenu() {
   const { authenticatedApi, logout, currentUser, isAdmin } = useAuthenticatedApi()
   const navigate = useNavigate()
+  const managed = Boolean(useServerConfig()?.managedAgentModel)
 
   const avatarUrl = useAvatar(authenticatedApi, currentUser?.id)
 
@@ -38,12 +40,12 @@ export default function UserMenu() {
         >
           Profile
         </DropdownMenu.Item>
-        <DropdownMenu.Item
+        {!managed && <DropdownMenu.Item
           onClick={() => navigate({ to: '/providers' })}
           className={MENU_ITEM}
         >
           Providers
-        </DropdownMenu.Item>
+        </DropdownMenu.Item>}
         {isAdmin && (
           <DropdownMenu.Item
             onClick={() => navigate({ to: '/admin' })}

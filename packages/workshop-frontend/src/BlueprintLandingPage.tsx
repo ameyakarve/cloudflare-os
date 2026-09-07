@@ -1,3 +1,4 @@
+import { useServerConfig } from './ServerConfigContext'
 import { logRpcFailure } from './rpcErrors'
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { useNavigate, useParams, useRouter } from '@tanstack/react-router'
@@ -33,6 +34,7 @@ type BindingFormState = Record<string, any>
 const NO_AGENT_MODEL_ID = 'gadgets:sentinel:no-agent-model'
 
 export default function BlueprintLandingPage({ rpcStub }: Props) {
+  const managedModel = useServerConfig()?.managedAgentModel
   const params = useParams({ strict: false }) as { id?: string }
   const id = params.id ?? ''
   const navigate = useNavigate()
@@ -442,6 +444,14 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
       let changed = false
 
       for (let [name, binding] of Object.entries(blueprint.metadata.bindings)) {
+        if (managedModel && (binding.type === 'aiModel' || binding.type === 'agentSpawner')) {
+          const existing = next[name]
+          if (!existing || !('modelId' in existing) || existing.modelId !== managedModel) {
+            next[name] = { type: binding.type, modelId: managedModel }
+            changed = true
+          }
+          continue
+        }
         if (next[name]) continue
 
         if (binding.type === 'gatekeeper') {
@@ -478,7 +488,7 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
 
       return changed ? next : prev
     })
-  }, [blueprint, isAuthenticated, findMatchingAccounts, findSuggestedModelId])
+  }, [blueprint, isAuthenticated, findMatchingAccounts, findSuggestedModelId, managedModel])
 
   const handleStartConfigure = () => {
     if (!isAuthenticated) {
@@ -1372,6 +1382,10 @@ function BindingField({
   selectPortalContainer?: HTMLElement | null
 }) {
   const title = binding.title || name
+  const managedModel = useServerConfig()?.managedAgentModel
+  if (managedModel && (binding.type === 'aiModel' || binding.type === 'agentSpawner')) {
+    return <p className="text-sm text-kumo-subtle">{title}: model managed by the deployment</p>
+  }
 
   if (binding.type === 'gatekeeper') {
     return (

@@ -1,3 +1,4 @@
+import { useServerConfig } from '../../../ServerConfigContext';
 import { DropdownMenu } from "@cloudflare/kumo";
 import { CaretDown, Check } from "@phosphor-icons/react";
 import type { AiChatAuthorInfo } from "@gadgets/workshop-shared/api";
@@ -13,6 +14,8 @@ export const ComposerModelSelector = ({
   selectedModel,
   onModelChange,
 }: ComposerModelSelectorProps) => {
+  const managedModel = useServerConfig()?.managedAgentModel;
+  if (managedModel) return null;
   const selectedModelLabel = selectedModel == null
     ? "No agent"
     : models.find((model) => model.id === selectedModel)?.name ?? selectedModel;

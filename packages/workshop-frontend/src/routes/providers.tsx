@@ -1,3 +1,4 @@
+import { useServerConfig, useSiteName } from '../ServerConfigContext'
 import { createFileRoute } from '@tanstack/react-router'
 import { useState, useEffect, useRef } from 'react'
 import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
@@ -131,6 +132,14 @@ function Notice({ children }: { children: React.ReactNode }) {
 // ─── main page ────────────────────────────────────────────────────────────────
 
 function ProvidersPage() {
+  const managed = useServerConfig()?.managedAgentModel
+  const siteName = useSiteName()
+  return managed
+    ? <div className="p-6 text-kumo-default">Agent models are managed by {siteName}.</div>
+    : <ConfigurableProvidersPage />
+}
+
+function ConfigurableProvidersPage() {
   useDocumentTitle('AI Providers')
 
   const { authenticatedApi } = useAuthenticatedApi()

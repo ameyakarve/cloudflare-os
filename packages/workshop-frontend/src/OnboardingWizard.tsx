@@ -28,7 +28,7 @@ import { getVendorIconBackground } from './components/vendorColors'
 import { compressAvatar, avatarBlobUrl } from './avatarUtils'
 import { invalidateAvatarCache } from './useAvatar'
 import { useTheme } from './ThemeContext'
-import { useSiteName } from './ServerConfigContext'
+import { useSiteName, useServerConfig } from './ServerConfigContext'
 import SiteLogo from './components/SiteLogo'
 import { useDocumentTitle } from './useDocumentTitle'
 import { AccountsSubscriberAdapter } from './accountsSubscriber'
@@ -66,6 +66,7 @@ export default function OnboardingWizard({
   const { resolvedThemeMode } = useTheme()
   const toasts = useKumoToastManager()
   const siteName = useSiteName()
+  const managed = Boolean(useServerConfig()?.managedAgentModel)
   useDocumentTitle('Setup')
 
   // Wizard state
@@ -116,6 +117,7 @@ export default function OnboardingWizard({
 
   // Load models + AI config
   const fetchModels = useCallback(async () => {
+    if (managed) { setModelsLoading(false); return }
     try {
       const [modelList, cfg] = await Promise.all([
         authenticatedApi.listModels(),
@@ -132,7 +134,7 @@ export default function OnboardingWizard({
     } finally {
       setModelsLoading(false)
     }
-  }, [authenticatedApi])
+  }, [authenticatedApi, managed])
 
   useEffect(() => {
     fetchModels()
@@ -265,9 +267,9 @@ export default function OnboardingWizard({
   // ── navigation ────────────────────────────────────────────────────────────────
 
   const showConnectionsStep = vendorsLoading || vendors.length > 0
-  const totalSteps = showConnectionsStep
+  const totalSteps = (showConnectionsStep
     ? TOTAL_STEPS_WITH_CONNECTIONS
-    : TOTAL_STEPS_WITH_CONNECTIONS - 1
+    : TOTAL_STEPS_WITH_CONNECTIONS - 1) - (managed ? 2 : 0)
   const showcaseStep = totalSteps - 1
 
   useEffect(() => {
@@ -280,18 +282,18 @@ export default function OnboardingWizard({
   const handleFinish = async () => {
     setFinishing(true)
     try {
-      // Save display name if changed
-      const trimmedName = displayName.trim()
-      if (trimmedName && trimmedName !== originalDisplayName) {
-        await authenticatedApi.setOwnDisplayName(trimmedName)
+      if (!managed) {
+        const trimmedName = displayName.trim()
+        if (trimmedName && trimmedName !== originalDisplayName) {
+          await authenticatedApi.setOwnDisplayName(trimmedName)
+        }
+        if (avatarData) {
+          await authenticatedApi.setAvatar(avatarData)
+          if (currentUser?.id) invalidateAvatarCache(currentUser.id)
+        }
+        await authenticatedApi.setPreferredModel(selectedModelId)
+        persistSelectedModel(selectedModelId)
       }
-      if (avatarData) {
-        await authenticatedApi.setAvatar(avatarData)
-        if (currentUser?.id) invalidateAvatarCache(currentUser.id)
-      }
-      // selectedModelId is null when the user chose "No agent" or didn't pick one
-      await authenticatedApi.setPreferredModel(selectedModelId)
-      persistSelectedModel(selectedModelId)
       await authenticatedApi.completeOnboarding()
       onComplete()
     } catch (err) {
@@ -385,6 +387,7 @@ export default function OnboardingWizard({
             className="flex transition-transform duration-400 ease-[cubic-bezier(0.25,0.1,0.25,1)]"
             style={{ transform: `translateX(-${step * 100}%)` }}
           >
+            {!managed && <>
             {/* ── Step 0: Profile ───────────────────────────────────────────── */}
             <div className="min-h-[320px] w-full flex-shrink-0 p-5 sm:min-h-[420px] sm:p-8">
               <h2 className="text-lg font-medium text-kumo-default mb-1">
@@ -557,6 +560,7 @@ export default function OnboardingWizard({
               </div>
             </div>
 
+            </>}
             {/* ── Step 2: Connections ───────────────────────────────────────── */}
             <div className={`min-h-[320px] w-full flex-shrink-0 p-5 sm:min-h-[420px] sm:p-8 ${showConnectionsStep ? '' : 'hidden'}`}>
               <div>
@@ -643,7 +647,7 @@ export default function OnboardingWizard({
 
             {/* ── Final step: What you can do ────────────────────────────────── */}
             <div className="min-h-[320px] w-full flex-shrink-0 p-5 sm:min-h-[420px] sm:p-8">
-              <ShowcaseStep active={step === showcaseStep} siteName={siteName} />
+              <ShowcaseStep active={step === showcaseStep} siteName={siteName} managed={managed} />
             </div>
           </div>
 
@@ -706,7 +710,7 @@ export default function OnboardingWizard({
 
     {/* Add Model Modal — outside the wizard's inner content so it's not
         clipped by overflow-hidden on the sliding panel */}
-    <AddModelModal
+    {!managed && <AddModelModal
       visible={addModelOpen}
       onCancel={() => setAddModelOpen(false)}
       onSuccess={() => {
@@ -715,7 +719,7 @@ export default function OnboardingWizard({
       }}
       authenticatedApi={authenticatedApi}
       aiConfig={aiConfig}
-    />
+    />}
     </>
   )
 }
@@ -728,6 +732,7 @@ interface ShowcaseFeature {
   iconBg: string
   title: string
   description: string
+  userModels?: boolean
 }
 
 const SHOWCASE_FEATURES: ShowcaseFeature[] = [
@@ -751,6 +756,7 @@ const SHOWCASE_FEATURES: ShowcaseFeature[] = [
     icon: Key,
     iconColor: 'text-kumo-warning',
     iconBg: 'bg-kumo-warning-tint',
+    userModels: true,
     title: 'Bring your own models',
     description:
       'Plug in personal API tokens from any provider to use the models you love.',
@@ -765,7 +771,7 @@ const SHOWCASE_FEATURES: ShowcaseFeature[] = [
   },
 ]
 
-function ShowcaseStep({ active, siteName }: { active: boolean; siteName: string }) {
+function ShowcaseStep({ active, siteName, managed }: { active: boolean; siteName: string; managed: boolean }) {
   // Mount-trigger for staggered fade-in when the step becomes visible
   const [revealed, setRevealed] = useState(false)
 
@@ -789,7 +795,7 @@ function ShowcaseStep({ active, siteName }: { active: boolean; siteName: string 
       </div>
 
       <div className="space-y-2.5">
-        {SHOWCASE_FEATURES.map((feature, i) => {
+        {SHOWCASE_FEATURES.filter(feature => !managed || !feature.userModels).map((feature, i) => {
           const Icon = feature.icon
           return (
             <div

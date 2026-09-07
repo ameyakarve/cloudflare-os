@@ -1,3 +1,4 @@
+import { useServerConfig } from './ServerConfigContext';
 import { ActionComparisonReview } from "./components/ActionComparisonReview";
 import { logRpcFailure } from "./rpcErrors";
 import {
@@ -2628,6 +2629,7 @@ function ChatInterface({
   onOpenGadget,
   outputOfWorkpiece,
 }: ChatInterfaceProps) {
+  const managedModel = useServerConfig()?.managedAgentModel;
   // Persistent cache that survives reconnects
   const toasts = useKumoToastManager();
   const { currentUser } = useAuthenticatedApi();
@@ -3272,6 +3274,7 @@ function ChatInterface({
 
   // Update selected model when switching chats
   useEffect(() => {
+    if (managedModel) { setSelectedModel(managedModel); return; }
     if (selectedChatId === null) {
       setSelectedModel(getStoredSelectedModel(availableModels));
     } else {
@@ -3289,7 +3292,7 @@ function ChatInterface({
         );
       }
     }
-  }, [selectedChatId, availableModels, currentMessages, activeAgent]);
+  }, [selectedChatId, availableModels, currentMessages, activeAgent, managedModel]);
 
   // Keep the ref in sync with selectedChatId state
   useEffect(() => {
@@ -3738,7 +3741,7 @@ function ChatInterface({
 
           setAvailableModels(models);
 
-          setSelectedModel(getStoredSelectedModel(models));
+          setSelectedModel(managedModel ?? getStoredSelectedModel(models));
 
           forceUpdate();
         }

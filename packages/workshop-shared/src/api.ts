@@ -1058,6 +1058,9 @@ export type ServerConfig = {
    */
   authVendors: AuthVendorInfo[];
 
+  /** When set, the deployment owns agent selection; hide user model/profile onboarding. */
+  managedAgentModel?: string;
+
   /**
    * Whether username/password login is available. Defaults to true; an installation can disable it
    * (DISABLE_PASSWORD_AUTH) to be OAuth-only. Forced true if no auth vendor is configured, to avoid
@@ -1195,6 +1198,9 @@ const SUGGESTED_MODEL_CATALOG = {
     "@cf/zai-org/glm-5.3-flash": {
       name: "GLM 5.3 Flash (Workers AI)", contextWindow: 1048576,
       outputLimit: WORKERS_AI_OUTPUT_LIMIT,
+    },
+    "@cf/deepseek-ai/deepseek-v4-flash-0731": {
+      name: "DeepSeek Flash", contextWindow: 1048576,
     },
     "@cf/deepseek-ai/deepseek-v4-pro-0813": {
       name: "DeepSeek V4 Pro 0813 (Workers AI)", contextWindow: 1048576,

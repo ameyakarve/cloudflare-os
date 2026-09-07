@@ -783,7 +783,8 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
     let signupsEnabled = this.env.MILESVAULT_AUTH === "true" ||
         (await readAdminConfig(this.env)).signupsEnabled;
     let accountCreated =
-        await this.users.get(userId).authenticateFromCfAccess(email, signupsEnabled);
+        await this.users.get(userId).authenticateFromCfAccess(email, signupsEnabled,
+          typeof this.accessPayload.name === 'string' ? this.accessPayload.name : undefined);
     if (accountCreated) {
       recordAnalytics(this.ctx, this.env, {
         event_name: "account_created",
@@ -939,6 +940,11 @@ export default {
           // OS keeps a normalized account identity; the existing MilesVault Durable Object key
           // remains exact and case-sensitive, and is carried separately to the Ledger output.
           accessPayload = { email: deploymentIdentity(ledgerKey).subject, externalIdentityKey: ledgerKey };
+          const encodedName = req.headers.get('x-milesvault-profile-name');
+          if (encodedName && encodedName.length <= 2400) {
+            try { accessPayload.name = decodeURIComponent(encodedName); }
+            catch { /* Display metadata cannot change or invalidate the authenticated identity. */ }
+          }
         } else {
           const payload = await verifyCfAccessJwt(req, env);
           if (!payload) return new Response("Invalid CF access JWT.", { status: 403 });

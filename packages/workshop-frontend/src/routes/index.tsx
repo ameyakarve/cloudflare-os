@@ -1,3 +1,4 @@
+import { useServerConfig } from '../ServerConfigContext';
 import { classifyRpcError, logRpcFailure } from "../rpcErrors";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
@@ -44,6 +45,7 @@ export function HomePageContent({ prompt }: HomeSearch) {
 
   const { authenticatedApi, currentUser } = useAuthenticatedApi();
   const navigate = useNavigate();
+  const managedModel = useServerConfig()?.managedAgentModel;
   const toasts = useKumoToastManager();
 
   const [models, setModels] = useState<AiChatAuthorInfo[]>([]);
@@ -63,7 +65,7 @@ export function HomePageContent({ prompt }: HomeSearch) {
       .then((list) => {
         if (cancelled) return;
         setModels(list);
-        setSelectedModel(getStoredSelectedModel(list));
+        setSelectedModel(managedModel ?? getStoredSelectedModel(list));
       })
       .catch((err) => {
         logRpcFailure("Failed to fetch models:", err);
@@ -76,7 +78,7 @@ export function HomePageContent({ prompt }: HomeSearch) {
     return () => {
       cancelled = true;
     };
-  }, [authenticatedApi]);
+  }, [authenticatedApi, managedModel]);
 
   const handleModelChange = useCallback((value: string | null) => {
     setSelectedModel(value);

@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { Hexagon, List, X } from '@phosphor-icons/react'
 import { useOptionalAuthenticatedApi } from '../AuthContext'
 import { useGatekeeperApps } from '../useGatekeeperApps'
-import { useSiteName } from '../ServerConfigContext'
+import { useSiteName, useServerConfig } from '../ServerConfigContext'
 import { useState, useEffect, useRef } from 'react'
 import UserMenu from './UserMenu'
 import TopBarNotice from '../TopBarNotice'
@@ -12,6 +12,7 @@ export default function Header() {
   const auth = useOptionalAuthenticatedApi()
   const gatekeeperApps = useGatekeeperApps()
   const siteName = useSiteName()
+  const managed = Boolean(useServerConfig()?.managedAgentModel)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const headerRef = useRef<HTMLElement>(null)
@@ -169,14 +170,14 @@ export default function Header() {
                 >
                   Profile
                 </Link>
-                <Link
+                {!managed && <Link
                   to="/providers"
                   onClick={closeMobileMenu}
                   className={navLinkClass}
                   activeProps={{ className: navLinkActiveClass }}
                 >
                   Providers
-                </Link>
+                </Link>}
                 {auth.isAdmin && (
                   <Link
                     to="/admin"
