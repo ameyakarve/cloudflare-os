@@ -14,10 +14,11 @@ class FixtureRun extends RpcTarget implements DeploymentUsageRun {
   settlements: number[] = [];
   finished = false;
   refuse = false;
+  refuseResource?: keyof DeploymentUsage;
   constructor(readonly expiresAt = Date.now() + 10_000) { super(); }
   async getGrant(): Promise<UsageGrant> { return {allowed: true, runId: crypto.randomUUID(), expiresAt: this.expiresAt}; }
   async reserve(usage: DeploymentUsage) {
-    if (this.refuse || this.finished || this.expiresAt <= Date.now()) throw new DeploymentUsageError("run_limit");
+    if (this.refuse || this.finished || this.expiresAt <= Date.now()) throw new DeploymentUsageError("run_limit", this.refuseResource);
     this.reservations.push(usage);
     return crypto.randomUUID();
   }
@@ -57,13 +58,29 @@ describe("native scoped inference budgets", () => {
   });
 
   it("refuses exhausted scope before any provider dispatch", async () => {
-    const fixture = new FixtureRun(); fixture.refuse = true;
+    const fixture = new FixtureRun(); fixture.refuse = true; fixture.refuseResource = "tokens";
     await using scope = await UsageScope.open(new RpcStub(fixture));
     let fetches = 0;
     const result = await streamWithUsage(fakeProvider(), model, context, {fetch: async () => {
       fetches++; return new Response("");
     }}, scope).result();
     expect(result.stopReason).toBe("error"); expect(fetches).toBe(0);
+    expect(result.errorMessage).toContain("Resource: tokens");
+    expect(result.errorMessage).not.toMatch(/429|retry later/i);
+  });
+
+  it("distinguishes the model deadline from a provider rate limit", async () => {
+    const controller = new AbortController();
+    controller.abort(new DeploymentUsageError("request_deadline"));
+    await using scope = await UsageScope.open(new RpcStub(new FixtureRun()));
+    const result = await streamWithUsage(fakeProvider(), model, context, {signal: controller.signal}, scope).result();
+    expect(result.errorMessage).toContain("60-second deadline");
+    expect(result.errorMessage).not.toMatch(/429|retry later/i);
+    const provider = await streamWithUsage(fakeProvider(), model, context, {fetch: async () => {
+      throw new Error("429 Too Many Requests");
+    }}, scope).result();
+    expect(provider.errorMessage).toContain("429 Too Many Requests");
+    expect(new DeploymentUsageError("daily_limit", "modelRequests").message).toContain("Retrying now will not help");
   });
 
   it("keeps the full token reservation when usage is missing", async () => {
@@ -83,6 +100,8 @@ describe("native scoped inference budgets", () => {
       }, {once: true}));
     }}, scope).result();
     expect(result.stopReason).toBe("error"); expect(transportAborted).toBe(true);
+    expect(result.errorMessage).toContain("expired");
+    expect(result.errorMessage).not.toContain("429");
     expect(fixture.settlements).toEqual([]);
   });
 
@@ -137,7 +156,7 @@ it("uses the stored exact User DO identity and resumes only the supplied existin
       let settlementError = "";
       try { await scope.run.settleTokens(crypto.randomUUID(), 0); } catch (error) { settlementError = String(error); }
       expect(settlementError).toContain("unavailable");
-      await expect(instance.beginDeploymentUsageRun(crypto.randomUUID())).rejects.toThrow("expired run");
+      await expect(instance.beginDeploymentUsageRun(crypto.randomUUID())).rejects.toThrow("OS allowance expired");
     } finally { instance["env"].DEPLOYMENT_USAGE_POLICY = oldPolicy; }
   });
 }, 15_000);

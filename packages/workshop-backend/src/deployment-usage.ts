@@ -3,8 +3,16 @@ import type { DeploymentUsage, DeploymentUsagePolicy, DeploymentUsageRun, UsageG
 
 /** Expected refusal; distinguish quota control flow from provider incidents. */
 export class DeploymentUsageError extends Error {
-  constructor(reason = "unavailable") {
-    super(`OS usage allowance ${reason.replaceAll("_", " ")}. Please retry later.`);
+  constructor(reason = "unavailable", resource?: keyof DeploymentUsage) {
+    const messages: Record<string, string> = {
+      daily_limit: "The daily OS allowance is exhausted. Retrying now will not help.",
+      run_limit: "This request exhausted its OS allowance. No further work can run in this request.",
+      expired_run: "This request's OS allowance expired.",
+      concurrent_runs: "Too many OS requests are running. Wait for them to finish.",
+      request_deadline: "The model request exceeded its 60-second deadline.",
+      unavailable: "OS usage accounting is unavailable; the request was stopped.",
+    };
+    super(`${messages[reason] ?? messages.unavailable}${resource ? ` Resource: ${resource}.` : ""}`);
     this.name = "DeploymentUsageError";
   }
 }
@@ -51,7 +59,8 @@ export class DeploymentUsageRunImpl extends RpcTarget implements DeploymentUsage
     this.#check();
     const requestId = crypto.randomUUID();
     const result = await boundedUsage((async () => await this.#policy.reserve(this.#key, this.#grant.runId, requestId, usage))());
-    if (result?.allowed !== true) throw new DeploymentUsageError(result?.allowed === false ? result.reason : undefined);
+    if (result?.allowed !== true) throw new DeploymentUsageError(result?.allowed === false ? result.reason : undefined,
+        result?.allowed === false ? result.resource : undefined);
     this.#check();
     this.#receipts.add(requestId);
     return requestId;

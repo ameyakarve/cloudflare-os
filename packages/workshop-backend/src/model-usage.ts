@@ -1,6 +1,6 @@
 import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, StreamFunction } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { boundedUsage, DeploymentUsageError, isDeploymentUsageError, type UsageScope } from "./deployment-usage.js";
+import { boundedUsage, DeploymentUsageError, type UsageScope } from "./deployment-usage.js";
 import { zeroUsage } from "./ai-invoke.js";
 
 /** Reserve each actual provider dispatch, bound its lifetime, and settle only verified usage. */
@@ -14,8 +14,9 @@ export function streamWithUsage(stream: StreamFunction<Api, SimpleStreamOptions>
   const fail = (error: unknown) => {
     const message: AssistantMessage = {role: "assistant", api: model.api, provider: model.provider,
       model: model.id, content: [], usage: zeroUsage(), timestamp: Date.now(), stopReason: "error",
-      errorMessage: isDeploymentUsageError(error) ? `429 ${error.message}` :
-          error instanceof Error ? error.message : "The model request failed."};
+      // Accounting denials and deadlines are not provider HTTP 429 responses.
+      // A synthetic 429 encourages futile retries and hides the actual blocker.
+      errorMessage: error instanceof Error ? error.message : "The model request failed."};
     output.push({type: "error", reason: "error", error: message});
     output.end();
   };

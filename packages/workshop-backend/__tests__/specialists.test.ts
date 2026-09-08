@@ -126,9 +126,9 @@ describe('specialist configuration and RPC membrane', () => {
   it('refuses a resumed allowance with a replaced identity or deadline', async () => {
     const allowance = new RootAllowance();
     await expect(UsageScope.open(new RpcStub(allowance), {...allowance.grant,
-      expiresAt: allowance.grant.expiresAt - 1})).rejects.toThrow('expired run');
+      expiresAt: allowance.grant.expiresAt - 1})).rejects.toThrow('OS allowance expired');
     await expect(UsageScope.open(new RpcStub(allowance), {...allowance.grant,
-      runId: 'different'})).rejects.toThrow('expired run');
+      runId: 'different'})).rejects.toThrow('OS allowance expired');
     expect(allowance.finished).toBe(false);
   });
 
