@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { calculateCost } from "@earendil-works/pi-ai";
+import { zeroUsage } from "../src/ai-invoke.js";
 import type { AiChatAuthorInfo, AiModelConfig } from "@gadgets/workshop-shared/api";
 import { getModel, type ModelHandle } from "../src/ai-models.js";
 
@@ -68,6 +70,19 @@ async function captureRequest(handle: ModelHandle): Promise<CapturedRequest> {
 describe("getModel AI Gateway routing", () => {
   beforeEach(() => {
     capturedRequests.length = 0;
+  });
+
+  it("prices the OpenRouter Flash preset at the same published rates as Workers AI", () => {
+    const gateway = env({CF_AI_GATEWAY_PROVIDERS: "cloudflare,openrouter"});
+    const preset = getModel(gateway, {provider: "openrouter", model: "@preset/deepseek-731-flash", apiToken: ""}, INITIATOR);
+    const workers = getModel(gateway, {provider: "cloudflare", model: "@cf/deepseek-ai/deepseek-v4-flash-0731", apiToken: ""}, INITIATOR);
+    expect(preset.model.cost).toEqual({input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44});
+    expect(preset.model.cost).toEqual(workers.model.cost);
+    const usage = {...zeroUsage(), input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000, totalTokens: 4_000_000};
+    expect(calculateCost(preset.model, usage).total).toBeCloseTo(2.214);
+    expect(getModel(gateway, {provider: "openrouter", model: "@preset/other", apiToken: ""}, INITIATOR).model.cost.input).toBe(0);
+    expect(preset.model.baseUrl).toContain("/openrouter");
+    expect(capturedRequests).toHaveLength(0);
   });
 
   it("routes the managed OpenRouter preset through the platform binding with stored-key auth", async () => {

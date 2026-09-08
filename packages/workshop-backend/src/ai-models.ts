@@ -130,6 +130,12 @@ const API_STREAMS: Record<string, StreamFunction<Api, SimpleStreamOptions>> = {
 
 const ZERO_COST: ModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+// USD per million tokens, published Workers AI Flash 0731 rates (2026-09-08).
+// https://developers.cloudflare.com/workers-ai/models/deepseek-v4-flash-0731/
+// Owner-approved estimate for the OpenRouter preset too, not an OpenRouter invoice.
+// No separate cache-write price is published: count writes as ordinary input.
+const FLASH_0731_COST: ModelCost = { input: 0.44, output: 1.32, cacheRead: 0.014, cacheWrite: 0.44 };
+
 // Consult pi's builtin catalog for cost/compat metadata of a known model id. Unknown models are
 // fine (synthesized with zero cost). Import per-provider, not providers/all.
 function catalogModel(provider: AiModelConfig["provider"], modelId: string): Model<Api> | undefined {
@@ -183,6 +189,9 @@ function workersAiCompat(catalog: Model<Api> | undefined): OpenAICompletionsComp
 function gatewayNativeModel(config: AiModelConfig, gatewayUrl: string): Model<Api> | undefined {
   const catalog = catalogModel(config.provider, config.model);
   const window = modelTokenWindow(config, catalog);
+  const cost = config.provider === "cloudflare" && config.model === "@cf/deepseek-ai/deepseek-v4-flash-0731" ||
+      config.provider === "openrouter" && config.model === "@preset/deepseek-731-flash"
+      ? FLASH_0731_COST : catalog?.cost ?? ZERO_COST;
   switch (config.provider) {
     case "anthropic":
       return {
@@ -237,7 +246,7 @@ function gatewayNativeModel(config: AiModelConfig, gatewayUrl: string): Model<Ap
         id: config.model, name: SUGGESTED_MODELS.openrouter[config.model]?.name ?? config.model,
         api: "openai-completions", provider: "openrouter",
         baseUrl: `${gatewayUrl}/openrouter`,
-        reasoning: true, input: ["text"], cost: ZERO_COST, ...window,
+        reasoning: true, input: ["text"], cost, ...window,
         // With no explicit effort, leave the preset's reasoning settings alone.
         thinkingLevelMap: { off: null },
         compat: { supportsStore: false, supportsDeveloperRole: false,
@@ -255,7 +264,7 @@ function gatewayNativeModel(config: AiModelConfig, gatewayUrl: string): Model<Ap
         baseUrl: `${gatewayUrl}/workers-ai/v1`,
         reasoning: catalog?.reasoning ?? false,
         input: catalog?.input ?? ["text"],
-        cost: catalog?.cost ?? ZERO_COST,
+        cost,
         ...window,
         compat: workersAiCompat(catalog),
       };
