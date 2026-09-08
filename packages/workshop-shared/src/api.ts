@@ -1140,7 +1140,7 @@ export type CloudflareAccountOption = {
 };
 
 /** Supported AI providers. */
-export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "ollama";
+export type AiModelProvider = "openai" | "anthropic" | "google" | "cloudflare" | "openrouter" | "ollama";
 
 /** Information about the AI gateway configuration. Returned by `AuthenticatedApi.getAiConfig()`. */
 export type AiGatewayInfo = {
@@ -1221,6 +1221,12 @@ const SUGGESTED_MODEL_CATALOG = {
   },
   "google": {
     "gemini-3.6-flash": {name: "Gemini 3.6 Flash", contextWindow: 1048576},
+  },
+  "openrouter": {
+    "@preset/deepseek-731-flash": {
+      // Retain the managed agent's existing request cap; other settings stay in the preset.
+      name: "DeepSeek 731 Flash (OpenRouter)", contextWindow: 1048576, outputLimit: 32768,
+    },
   },
   "ollama": {
   },

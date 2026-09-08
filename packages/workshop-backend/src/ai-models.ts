@@ -232,6 +232,17 @@ function gatewayNativeModel(config: AiModelConfig, gatewayUrl: string): Model<Ap
         ...window,
         thinkingLevelMap: catalog?.thinkingLevelMap,
       };
+    case "openrouter":
+      return {
+        id: config.model, name: SUGGESTED_MODELS.openrouter[config.model]?.name ?? config.model,
+        api: "openai-completions", provider: "openrouter",
+        baseUrl: `${gatewayUrl}/openrouter`,
+        reasoning: true, input: ["text"], cost: ZERO_COST, ...window,
+        // With no explicit effort, leave the preset's reasoning settings alone.
+        thinkingLevelMap: { off: null },
+        compat: { supportsStore: false, supportsDeveloperRole: false,
+          supportsUsageInStreaming: true, maxTokensField: "max_tokens", thinkingFormat: "openrouter" },
+      };
     case "cloudflare":
       // Workers AI's own OpenAI-compatible endpoint, exposed through the gateway's workers-ai
       // route. This is Workers AI's native chat API (the same surface as its direct
@@ -372,6 +383,13 @@ export function getModel(env: Cloudflare.Env, config: AiModelConfig,
 
 function resolveModel(env: Cloudflare.Env, config: AiModelConfig,
     initiator: AiChatAuthorInfo, options: ModelRoutingOptions): ModelHandle {
+  // Deployment presets belong to the platform's stored-key account. Never let a
+  // user-supplied gateway, URL or token redirect them to a different account.
+  if (config.provider === "openrouter" && env.DEPLOYMENT_AGENT_MODEL_ID) {
+    const gateway = getAiGatewayConfig(env);
+    if (!gateway) throw new Error("OpenRouter requires the deployment AI Gateway.");
+    return getModelViaGateway(gateway, config, initiator, options);
+  }
   // BYOK: a connected user's own Cloudflare account pays for everything (all providers, including
   // Workers AI), routed through the user's own AI Gateway with unified billing. Honored regardless
   // of whether a platform AI Gateway is configured, so connected users are always billed correctly.
@@ -461,6 +479,9 @@ function getModelViaGateway(
   initiator: AiChatAuthorInfo,
   options: ModelRoutingOptions,
 ): ModelHandle {
+  if (config.provider === "openrouter" && !gwConfig.providers.has("openrouter")) {
+    throw new Error("OpenRouter is not enabled on the deployment AI Gateway.");
+  }
   const metadata = buildMetadata(initiator, options.metadata);
   const binding = gwConfig.bindingFor(config.provider);
   // No binding means either the provider can't ride one or the deployment has none; the second
@@ -587,6 +608,8 @@ function getModelDirect(config: AiModelConfig, sessionAffinity?: string): ModelH
         apiKey: config.apiToken,
         sessionAffinity,
       });
+    case "openrouter":
+      throw new Error("OpenRouter is gateway-only; configure Cloudflare AI Gateway.");
     case "ollama":
       // `apiUrl` is the Ollama server base; its OpenAI-compat endpoint lives under /v1. Accept
       // (and strip) a trailing `/api` or `/v1` path: configs saved before the pi migration store

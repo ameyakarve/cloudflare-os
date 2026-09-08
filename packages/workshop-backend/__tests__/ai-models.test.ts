@@ -70,6 +70,47 @@ describe("getModel AI Gateway routing", () => {
     capturedRequests.length = 0;
   });
 
+  it("routes the managed OpenRouter preset through the platform binding with stored-key auth", async () => {
+    const handle = getModel(env({ CF_AI_GATEWAY_API_TOKEN: undefined,
+      CF_AI_GATEWAY_PROVIDERS: "cloudflare,openrouter", WORKERS_AI: {fetch: fetchStub} as unknown as Ai,
+      DEPLOYMENT_AGENT_MODEL_ID: "@preset/deepseek-731-flash" }), {
+      provider: "openrouter", model: "@preset/deepseek-731-flash", apiToken: "must-not-leak",
+      apiUrl: "https://openrouter.ai/api/v1",
+    }, INITIATOR, { userGateway: {accountId: "must-not-route-here", apiKey: "must-not-leak"},
+      metadata: {source: "chat", gadgetId: "fixture"} });
+    const result = await handle.stream(handle.model, {messages: [{role: "user", content: "hello", timestamp: 0}]}, {maxRetries: 0, maxTokens: handle.model.maxTokens}).result();
+    expect(result.stopReason).toBe("error"); // offline provider fixture returns 400
+    expect(capturedRequests).toHaveLength(1);
+    const request = capturedRequests[0];
+    expect(request.url).toBe("https://workers-binding.ai/ai-gateway/gateways/platform-gateway/openrouter/chat/completions");
+    expect(request.headers.get("authorization")).toBeNull();
+    expect(request.headers.get("cf-aig-authorization")).toBe("Bearer cloudflare-gateway-binding");
+    expect(JSON.parse(request.body)).toMatchObject({model: "@preset/deepseek-731-flash", max_tokens: 32768,
+      stream_options: {include_usage: true}});
+    expect(JSON.parse(request.body).reasoning).toBeUndefined();
+    expect(JSON.stringify(request)).not.toContain("must-not-leak");
+    expect(handle.aiGatewayLogRoute).toEqual({gateway: "platform-gateway"});
+  });
+
+  it("uses the OpenRouter native HTTPS gateway path, never the OpenAI route", async () => {
+    const handle = getModel(env({CF_AI_GATEWAY_PROVIDERS: "openrouter"}), {
+      provider: "openrouter", model: "@preset/deepseek-731-flash", apiToken: "ignored",
+    }, INITIATOR);
+    const request = await captureRequest(handle);
+    expect(request.url).toBe("https://gateway.ai.cloudflare.com/v1/gateway-account-id/platform-gateway/openrouter/chat/completions");
+    expect(request.headers.get("authorization")).toBeNull();
+    expect(request.headers.get("cf-aig-authorization")).toBe("Bearer gateway-token");
+  });
+
+  it("refuses OpenRouter without a gateway or an enabled platform provider", () => {
+    const config: AiModelConfig = {provider: "openrouter", model: "@preset/deepseek-731-flash", apiToken: "unused"};
+    expect(() => getModel({} as Cloudflare.Env, config, INITIATOR)).toThrow("gateway-only");
+    expect(() => getModel(env({DEPLOYMENT_AGENT_MODEL_ID: config.model}), config, INITIATOR)).toThrow("not enabled");
+    expect(() => getModel({DEPLOYMENT_AGENT_MODEL_ID: config.model} as Cloudflare.Env, config, INITIATOR,
+      {userGateway: {accountId: "other", apiKey: "unused"}})).toThrow("deployment AI Gateway");
+    expect(capturedRequests).toHaveLength(0);
+  });
+
   it("routes non-Workers providers through the platform gateway", async () => {
     const handle = getModel(env(), ANTHROPIC_CONFIG, INITIATOR, {
       metadata: { source: "chat", gadgetId: "gadget-123", chatId: 7 },

@@ -14,21 +14,24 @@ const settings = {
   CF_AI_GATEWAY_PROVIDERS: 'cloudflare', CF_AI_GATEWAY_API_TOKEN: 'never-used',
 };
 
-it('enforces the deployment agent for new, existing and external chats regardless of user selection', async () => {
+it.each([
+  {id: modelId, provider: 'cloudflare', name: 'DeepSeek Flash', providers: 'cloudflare'},
+  {id: '@preset/deepseek-731-flash', provider: 'openrouter', name: 'DeepSeek 731 Flash (OpenRouter)', providers: 'cloudflare,openrouter'},
+])('enforces $provider for new, existing and external chats regardless of user selection', async ({id, provider, name, providers}) => {
   const user = env.TEST_USER.getByName(crypto.randomUUID());
   await runInDurableObject(user, async instance => {
     const saved = Object.fromEntries(Object.keys(settings).map(k => [k, instance['env'][k as keyof typeof settings]]));
-    Object.assign(instance['env'], settings);
+    Object.assign(instance['env'], settings, {DEPLOYMENT_AGENT_MODEL_ID: id, CF_AI_GATEWAY_PROVIDERS: providers});
     try {
       instance['storage'].preferredModel.put('old-model');
-      expect(await instance.listModels()).toEqual([{ type: 'agent', id: modelId, name: 'DeepSeek Flash' }]);
-      expect(await instance.getPreferredModel()).toBe(modelId);
+      expect(await instance.listModels()).toEqual([{ type: 'agent', id, name }]);
+      expect(await instance.getPreferredModel()).toBe(id);
       for (const requested of [null, 'old-model', '@cf/any-client-choice']) {
         const context = await instance.getChatContext(requested);
-        expect(context.aiModel?.config).toEqual({ provider: 'cloudflare', model: modelId, apiToken: '' });
+        expect(context.aiModel?.config).toEqual({ provider, model: id, apiToken: '' });
         expect(context.quickModel?.model).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
       }
-      expect((await instance.getExternalMessageChatContext('old-model')).aiModel?.profile.id).toBe(modelId);
+      expect((await instance.getExternalMessageChatContext('old-model')).aiModel?.profile.id).toBe(id);
       await expect(instance.setPreferredModel('old-model')).rejects.toThrow('managed');
       await expect(instance.setPreferredModel(null)).rejects.toThrow('managed');
       await expect(instance.setQuickModel('old-model')).rejects.toThrow('managed');

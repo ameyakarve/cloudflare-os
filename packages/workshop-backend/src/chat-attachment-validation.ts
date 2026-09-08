@@ -37,6 +37,7 @@ const ATTACHMENT_SUPPORT_BY_PROVIDER = {
   openai: isTextImageOrPdfMime,
   google: isTextImageOrPdfMime,
   cloudflare: isTextOrImageMime,
+  openrouter: isTextLikeAttachmentMimeType,
   ollama: isTextOrImageMime,
 } satisfies Record<AiModelProvider, (mimeType: string) => boolean>;
 
