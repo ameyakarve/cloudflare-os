@@ -297,14 +297,14 @@ export default function SchedulerPage({
         >
           Get started
         </h2>
-        <div className="mt-3 grid gap-1">
+        <div className="mt-3 grid min-w-0 grid-cols-1 gap-1">
           {STARTERS.map((starter) => {
             const Icon = starter.icon;
             return (
               <button
                 key={starter.title}
                 type="button"
-                className="group flex items-center gap-3 rounded-lg px-1 py-2.5 text-left hover:bg-kumo-tint"
+                className="group flex min-w-0 items-center gap-3 rounded-lg px-1 py-2.5 text-left hover:bg-kumo-tint"
                 onClick={() => void runHostAction(() => openPrompt(starter.prompt))}
               >
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-kumo-fill text-kumo-subtle">
@@ -315,7 +315,7 @@ export default function SchedulerPage({
                     {starter.title}{" "}
                     <span className="ml-1 font-normal text-kumo-inactive">{starter.cadence}</span>
                   </span>
-                  <span className="block truncate text-xs text-kumo-subtle">
+                  <span className="block text-xs text-kumo-subtle">
                     {starter.description}
                   </span>
                 </span>
