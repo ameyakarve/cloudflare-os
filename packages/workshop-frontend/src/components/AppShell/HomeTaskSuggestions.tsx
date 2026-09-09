@@ -4,7 +4,7 @@ import {
   ChartLineUp,
   FileText,
   Lightning,
-  Presentation,
+  Airplane,
   type Icon,
 } from '@phosphor-icons/react'
 
@@ -23,44 +23,44 @@ type TaskSuggestion = {
 // first move isn't "pick a file type". The formats themselves are in the composer's `+` menu.
 const SUGGESTIONS: TaskSuggestion[] = [
   {
-    id: 'one-on-one',
-    label: 'Write a 1:1 pre-read',
-    description: 'A doc with a snapshot, things to inspect, and one ask',
-    icon: FileText,
-    prompt:
-      'Create a document to prepare for my next 1:1 with a direct report: a current snapshot, a coaching frame, things to inspect, carryover items from last time, and one clear ask.',
-  },
-  {
-    id: 'team-meeting',
-    label: 'Build a team meeting deck',
-    description: 'Slides with progress, risks, and what needs a decision',
-    icon: Presentation,
-    prompt:
-      'Create a slide deck for my next team meeting: where things stand, what shipped, risks and blockers, and the decisions I need from the room. Ask me what the team is working on first.',
-  },
-  {
-    id: 'insights',
-    label: 'Find insights in my data',
-    description: 'Turn a spreadsheet or CSV into trends and recommendations',
-    icon: ChartLineUp,
-    prompt:
-      'Turn a dataset I will share (a spreadsheet, CSV, or pasted table) into a narrative analysis: key trends, anomalies, the "so what", and concrete recommendations.',
-  },
-  {
-    id: 'workflow',
-    label: 'Automate a workflow',
-    description: 'Trigger an agent when a new email arrives',
+    id: 'cards',
+    label: 'Compare cards',
+    description: 'Compare rewards, fees, and benefits for your spending',
     icon: Lightning,
     prompt:
-      'Create an agent workflow that runs automatically when a new email arrives: read the message, decide what to do, and take action or draft a reply. Ask me which inbox to watch and what it should handle.',
+      'Help me compare cards for my spending and travel goals. Ask about my priorities first, use available card information, and flag missing or outdated terms. Do not assume eligibility or approval.',
+  },
+  {
+    id: 'travel',
+    label: 'Explore travel awards',
+    description: 'Research points options for a trip you have in mind',
+    icon: Airplane,
+    prompt:
+      'Help me explore award travel options. Ask for my route, dates, flexibility, and points programs. Use available tools and distinguish award rules or estimates from confirmed live availability. Do not promise seats or make bookings.',
+  },
+  {
+    id: 'holdings',
+    label: 'Review my holdings',
+    description: 'Make sense of the cards and rewards you track',
+    icon: ChartLineUp,
+    prompt:
+      'Summarize the cards and rewards holdings I have authorized you to read. If access or information is missing, ask me rather than inferring balances. Highlight gaps and useful next steps without changing my records.',
+  },
+  {
+    id: 'journal',
+    label: 'Draft a journal entry',
+    description: 'Organize a rewards activity before saving it',
+    icon: FileText,
+    prompt:
+      'Help me draft a journal entry for a rewards activity. Ask for the details and show me the proposed entry. Use only authorized records, request any required approval before saving, and clearly distinguish a draft from a saved entry.',
   },
   {
     id: 'app',
-    label: 'Build a quick tool',
-    description: 'A small interactive app, calculator, or dashboard',
+    label: 'Build a rewards Gadget',
+    description: 'A reusable calculator, comparison, or dashboard',
     icon: AppWindow,
     prompt:
-      'Build a small interactive tool I can use right here — a calculator, dashboard, or explorer. Ask me what it should do, then create it.',
+      'Help me build a reusable Gadget for comparing rewards or planning travel. Ask what it should calculate or display. Use information I provide or authorize, label assumptions, and do not imply live prices or availability without verification.',
   },
 ]
 

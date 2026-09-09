@@ -1,4 +1,4 @@
-import { useServerConfig } from './ServerConfigContext';
+import { useCloudflareLimitsEnabled, useServerConfig } from './ServerConfigContext';
 import { ActionComparisonReview } from "./components/ActionComparisonReview";
 import { logRpcFailure } from "./rpcErrors";
 import {
@@ -621,7 +621,7 @@ function getToolCallSummary(
     case "observeUserChanges":
       return { verb: "Observed user changes" };
     case "listBlueprints":
-      return { verb: "Listed blueprints" };
+      return { verb: "Listed templates" };
     case "listConnectableResources":
       return { verb: "Listed connectable resources", target: tc.input.vendorId };
     case "requestConnection":
@@ -705,7 +705,7 @@ function describeToolCallCount(toolName: AiToolCall["toolName"], count: number):
     case "giveUp":
       return count === 1 ? "Stopped" : `Stopped ${count} times`;
     case "listBlueprints":
-      return `Listed blueprints`;
+      return `Listed templates`;
     case "listConnectableResources":
       return `Listed connectable resources`;
     case "requestConnection":
@@ -808,7 +808,7 @@ function getProvisionalToolVerb(toolName: AiToolCall["toolName"]): string {
     case "webFetch": return "Fetching";
     case "observeUserChanges": return "Observing user changes";
     case "giveUp": return "Stopping";
-    case "listBlueprints": return "Listing blueprints";
+    case "listBlueprints": return "Listing templates";
     case "listConnectableResources": return "Listing connectable resources";
     case "requestConnection": return "Requesting a connection";
   }
@@ -836,7 +836,7 @@ function describeProvisionalToolCount(toolName: AiToolCall["toolName"], count: n
     case "createWorktree": return `Creating ${pluralize(count, "worktree")}`;
     case "observeUserChanges": return `Observing ${pluralize(count, "change set")}`;
     case "giveUp": return "Stopping";
-    case "listBlueprints": return "Listing blueprints";
+    case "listBlueprints": return "Listing templates";
     case "listConnectableResources": return "Listing connectable resources";
     case "requestConnection": return `Requesting ${pluralize(count, "connection")}`;
   }
@@ -2630,6 +2630,7 @@ function ChatInterface({
   outputOfWorkpiece,
 }: ChatInterfaceProps) {
   const managedModel = useServerConfig()?.managedAgentModel;
+  const cloudflareLimitsEnabled = useCloudflareLimitsEnabled();
   // Persistent cache that survives reconnects
   const toasts = useKumoToastManager();
   const { currentUser } = useAuthenticatedApi();
@@ -5989,7 +5990,7 @@ function ChatInterface({
                                         <span className="flex min-w-0 flex-1 items-center gap-1">
                                           <span className="min-w-0 truncate">
                                             <span className="font-medium text-kumo-danger">Error: </span>
-                                            <span className="text-kumo-subtle">{msg.message}</span>
+                                            <span className="text-kumo-subtle">{msg.code === "usage_limit" && !cloudflareLimitsEnabled ? "Usage limit reached. This request could not continue." : msg.message}</span>
                                           </span>
                                           <CaretRight
                                             size={13}
@@ -6001,14 +6002,14 @@ function ChatInterface({
                                     </Tooltip>
                                   </button>
                                   {isLast && msg.code === "usage_limit" && (
-                                    <Tooltip content="Add credits to continue." asChild>
+                                    <Tooltip content="View usage limit details." asChild>
                                       <button
                                         type="button"
                                         onClick={() => setUsageModalOpen(true)}
                                         className="flex flex-shrink-0 cursor-pointer items-center gap-1 rounded-md px-1 py-0.5 text-[13px] leading-4 font-medium text-kumo-default transition-[color,opacity,transform] duration-150 ease-out hover:text-kumo-default-hover focus-visible:text-kumo-default-hover focus-visible:outline-none active:scale-[0.98]"
                                       >
                                         <Lightning size={12} weight="bold" />
-                                        Continue
+                                        View limit
                                       </button>
                                     </Tooltip>
                                   )}
@@ -6029,7 +6030,7 @@ function ChatInterface({
                                 {expanded && (
                                   <div className="ml-8 mt-1">
                                     <pre className="max-h-48 overflow-auto rounded-xl border border-kumo-line/70 bg-kumo-base p-3 font-mono text-[12px] leading-[18px] text-kumo-subtle whitespace-pre-wrap">
-                                      {msg.message}
+                                      {msg.code === "usage_limit" && !cloudflareLimitsEnabled ? "Usage limit reached. Try again later or contact support if the limit persists." : msg.message}
                                     </pre>
                                   </div>
                                 )}

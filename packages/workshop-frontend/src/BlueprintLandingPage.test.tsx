@@ -85,9 +85,12 @@ function authenticatedApi(): RpcStub<AuthenticatedApi> {
   } as unknown as RpcStub<AuthenticatedApi>
 }
 
-function publicApi(): RpcStub<PublicApi> {
+function publicApi(error?: Error): RpcStub<PublicApi> {
   return {
-    getBlueprint: async () => BLUEPRINT,
+    getBlueprint: async () => {
+      if (error) throw error
+      return BLUEPRINT
+    },
   } as unknown as RpcStub<PublicApi>
 }
 
@@ -99,7 +102,24 @@ describe('BlueprintLandingPage model configuration', () => {
     act(() => root?.unmount())
     rootContainer?.remove()
     testState.authenticatedApi = null
+    vi.restoreAllMocks()
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth })
+  })
+
+  it('shows a recoverable template load failure without exposing storage diagnostics', async () => {
+    const failure = new Error('Blueprint content not found in R2')
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => {})
+    testState.authenticatedApi = authenticatedApi()
+    rootContainer = document.createElement('div')
+    document.body.appendChild(rootContainer)
+    root = createRoot(rootContainer)
+
+    await act(async () => root!.render(<BlueprintLandingPage rpcStub={publicApi(failure)} />))
+
+    expect(rootContainer.textContent).toContain('Couldn’t load template')
+    expect(rootContainer.textContent).toContain('Reload to try again')
+    expect(rootContainer.textContent).not.toContain('R2')
+    expect(diagnostic).toHaveBeenCalledWith('Failed to load blueprint:', failure)
   })
 
   it('portals model options above the configure dialog and accepts a selection', async () => {

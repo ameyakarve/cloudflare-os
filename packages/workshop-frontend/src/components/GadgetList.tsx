@@ -501,7 +501,7 @@ function HomeFeaturedBlueprintCard({
       <Link
         to="/blueprint/$id"
         params={{ id: blueprint.id }}
-        aria-label={`Open blueprint ${blueprint.metadata.title}`}
+        aria-label={`Open template ${blueprint.metadata.title}`}
         className="absolute inset-0 z-10 rounded-2xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kumo-brand"
       />
       <div className="pointer-events-none relative z-20 flex flex-1 flex-col p-2.5">
@@ -599,7 +599,7 @@ function FeaturedBlueprintsGallery() {
             to="/explore"
             className="inline-flex items-center gap-1.5 text-xs font-medium text-kumo-brand hover:text-kumo-brand-hover transition-colors"
           >
-            Browse all blueprints
+            Browse all templates
             <ArrowRight size={12} weight="bold" />
           </Link>
         </div>

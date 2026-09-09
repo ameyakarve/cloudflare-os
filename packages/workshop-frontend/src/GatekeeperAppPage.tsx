@@ -27,7 +27,7 @@ export default function GatekeeperAppPage({ appId }: { appId: string }) {
       .getGatekeeperApp(appId)
       .then((frame) => {
         if (!frame) {
-          if (!cancelled) setError('This app is not available on this deployment.')
+          if (!cancelled) setError('This connected app is not available in your workspace.')
           return
         }
         if (cancelled) {
@@ -42,7 +42,7 @@ export default function GatekeeperAppPage({ appId }: { appId: string }) {
         reportIssue('gatekeeper-app.load', err, {
           gatekeeperVendorId: appId,
         })
-        if (!cancelled) setError(`${err}`)
+        if (!cancelled) setError('Unable to load this connected app. Reload to try again, or check your access in Connections.')
       })
     return () => {
       cancelled = true

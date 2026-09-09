@@ -235,10 +235,10 @@ export default function SandboxedGatekeeperApp({ frame, gatekeeperVendorId }: {
   const accentColor = configuredAccentColor && isHexColor(configuredAccentColor)
     ? configuredAccentColor
     : null
-  const themeRef = useRef<GatekeeperAppTheme>({ mode: resolvedThemeMode, accentColor })
-  themeRef.current = { mode: resolvedThemeMode, accentColor }
+  const themeRef = useRef<GatekeeperAppTheme>({ mode: resolvedThemeMode, accentColor, skin: 'paper' })
+  themeRef.current = { mode: resolvedThemeMode, accentColor, skin: 'paper' }
   useEffect(() => {
-    hostRef.current?.updateTheme({ mode: resolvedThemeMode, accentColor })
+    hostRef.current?.updateTheme({ mode: resolvedThemeMode, accentColor, skin: 'paper' })
   }, [resolvedThemeMode, accentColor])
 
   const setOverlayPhase = useCallback((next: OverlayState) => {
@@ -368,7 +368,7 @@ export default function SandboxedGatekeeperApp({ frame, gatekeeperVendorId }: {
       // allow-same-origin (the frame stays an opaque origin), and the app's CSP keeps connect-src 'none'.
       sandbox="allow-scripts allow-modals"
       allow="clipboard-write"
-      title="Gatekeeper app"
+      title="Connected app"
       style={iframeStyleForOverlay(overlay)}
     />
   )

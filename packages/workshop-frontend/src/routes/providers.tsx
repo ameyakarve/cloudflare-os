@@ -1,4 +1,5 @@
-import { useServerConfig, useSiteName } from '../ServerConfigContext'
+import { useServerConfig, useServerConfigError, useSiteName } from '../ServerConfigContext'
+import { MILESVAULT_AUTH_MODE } from '../useAuth'
 import { createFileRoute } from '@tanstack/react-router'
 import { useState, useEffect, useRef } from 'react'
 import { DropdownMenu, useKumoToastManager } from '@cloudflare/kumo'
@@ -132,9 +133,16 @@ function Notice({ children }: { children: React.ReactNode }) {
 // ─── main page ────────────────────────────────────────────────────────────────
 
 function ProvidersPage() {
-  const managed = useServerConfig()?.managedAgentModel
+  useDocumentTitle('AI Providers')
+  const config = useServerConfig()
+  const configError = useServerConfigError()
   const siteName = useSiteName()
-  return managed
+  if (!config && !MILESVAULT_AUTH_MODE) {
+    return <div role="status" className="p-6 text-kumo-default">{configError
+      ? 'Unable to load model settings. Reload to try again.'
+      : 'Loading model settings…'}</div>
+  }
+  return MILESVAULT_AUTH_MODE || config?.managedAgentModel
     ? <div className="p-6 text-kumo-default">Agent models are managed by {siteName}.</div>
     : <ConfigurableProvidersPage />
 }

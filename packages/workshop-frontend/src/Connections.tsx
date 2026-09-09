@@ -333,10 +333,10 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
                             </WorkshopIconButton>
                           </Tooltip>
                           {!isPending && (
-                            <Tooltip content="Edit blueprint settings" asChild>
+                            <Tooltip content="Edit template settings" asChild>
                               <WorkshopIconButton
                                 onClick={() => setAnnotationTarget(gk)}
-                                aria-label="Edit blueprint settings"
+                                aria-label="Edit template settings"
                               >
                                 <Blueprint size={14} />
                               </WorkshopIconButton>
@@ -482,7 +482,7 @@ export default function Connections({ overseer, gadget, chatId, authenticatedApi
         gadget={gadget}
         onClose={() => setAnnotationTarget(null)}
         onSaved={() => {
-          toasts.add({ title: 'Blueprint settings saved.', variant: 'success' })
+          toasts.add({ title: 'Template settings saved.', variant: 'success' })
           setAnnotationTarget(null)
         }}
       />
@@ -561,7 +561,7 @@ function BlueprintAnnotationModal({
           <div className="flex items-start justify-between gap-4 border-b border-kumo-line px-4 py-4 sm:px-5">
             <div className="min-w-0">
               <Dialog.Title className="text-[15px] leading-5 font-medium tracking-[-0.3px] text-kumo-default">
-                Blueprint settings
+                Template settings
               </Dialog.Title>
               <Dialog.Description className="mt-1 text-[12px] leading-4 font-normal tracking-[-0.2px] text-kumo-subtle">
                 How this connection appears in blueprints.

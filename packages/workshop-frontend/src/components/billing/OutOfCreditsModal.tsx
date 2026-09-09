@@ -5,6 +5,7 @@ import { CloudWarning, Lightning } from '@phosphor-icons/react'
 import { useOptionalAuthenticatedApi } from '../../AuthContext'
 import { buildAddCreditsUrl } from './creditsUrl'
 import ResetCountdown from './ResetCountdown'
+import { useCloudflareLimitsEnabled } from '../../ServerConfigContext'
 
 interface OutOfCreditsModalProps {
   open: boolean
@@ -16,7 +17,23 @@ interface OutOfCreditsModalProps {
  * Cloudflare account (if not connected), pick which account to bill (if they have several), or top
  * up credits in the Cloudflare dashboard (if connected but low balance).
  */
-export default function OutOfCreditsModal({ open, onClose }: OutOfCreditsModalProps) {
+export default function OutOfCreditsModal(props: OutOfCreditsModalProps) {
+  const limitsEnabled = useCloudflareLimitsEnabled()
+  if (limitsEnabled) return <CloudflareOutOfCreditsModal {...props} />
+  return (
+    <Dialog.Root open={props.open} onOpenChange={(open) => { if (!open) props.onClose() }}>
+      <Dialog className="responsive-dialog p-6" size="base">
+        <Dialog.Title>Usage limit reached</Dialog.Title>
+        <p className="my-4 text-sm text-kumo-subtle">
+          This request could not continue because a usage limit was reached. Try again later or contact support if the limit persists.
+        </p>
+        <Button onClick={props.onClose}>Close</Button>
+      </Dialog>
+    </Dialog.Root>
+  )
+}
+
+function CloudflareOutOfCreditsModal({ open, onClose }: OutOfCreditsModalProps) {
   const auth = useOptionalAuthenticatedApi()
   const toasts = useKumoToastManager()
   const [usage, setUsage] = useState<CloudflareUsageInfo | null>(null)

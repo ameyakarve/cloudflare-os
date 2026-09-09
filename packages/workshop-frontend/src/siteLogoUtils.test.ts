@@ -167,6 +167,21 @@ describe('site logo preparation', () => {
 })
 
 describe('site favicon', () => {
+  it('keeps the fallback favicon under the deployment mount path', async () => {
+    vi.resetModules()
+    vi.stubEnv('BASE_URL', '/os/')
+    try {
+      const { applySiteFavicon: applyMountedFavicon } = await import('./siteLogoUtils')
+      document.head.innerHTML = '<link rel="icon" href="/os/favicon.svg">'
+      const cleanup = applyMountedFavicon(undefined)
+      expect(document.querySelector('link[rel="icon"]')?.getAttribute('href')).toBe('/os/favicon.svg')
+      cleanup()
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
+  })
+
   it('fetches the custom PNG once before assigning a blob favicon', async () => {
     document.head.innerHTML = '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
     const blob = new Blob([new Uint8Array([1])], { type: 'image/png' })

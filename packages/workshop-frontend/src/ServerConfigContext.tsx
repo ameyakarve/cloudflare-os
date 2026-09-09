@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import { ServerConfig, AuthVendorInfo, resolveSiteName } from '@gadgets/workshop-shared/api'
+import { MILESVAULT_AUTH_MODE } from './useAuth'
 
 /**
  * Deployment-level configuration fetched once at boot via PublicApi.getServerConfig().
@@ -33,5 +34,6 @@ export function useAuthVendors(): AuthVendorInfo[] {
 
 /** Convenience: whether the Cloudflare limits / top-up flow is enabled. */
 export function useCloudflareLimitsEnabled(): boolean {
-  return useContext(ServerConfigContext)?.cloudflareLimitsEnabled ?? false
+  const config = useContext(ServerConfigContext)
+  return !MILESVAULT_AUTH_MODE && !config?.managedAgentModel && config?.cloudflareLimitsEnabled === true
 }

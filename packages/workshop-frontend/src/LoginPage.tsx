@@ -66,7 +66,7 @@ export default function LoginPage({ rpcStub, onLoginSuccess }: LoginPageProps) {
           className="flex h-full min-h-0 flex-col items-center justify-center gap-4 overflow-y-auto bg-kumo-base px-4 py-8"
         >
           <p className="text-sm text-kumo-danger text-center">
-            Couldn&apos;t load deployment settings.
+            Couldn&apos;t load sign-in settings.
           </p>
           <Button variant="secondary" onClick={() => window.location.reload()}>Reload</Button>
         </div>

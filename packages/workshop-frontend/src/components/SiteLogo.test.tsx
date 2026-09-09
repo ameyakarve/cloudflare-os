@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 /* eslint-disable react/react-in-jsx-scope */
-
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { ServerConfig } from '@gadgets/workshop-shared/api'
 import { ServerConfigContext } from '../ServerConfigContext'
 import SiteLogo from './SiteLogo'
@@ -15,72 +14,62 @@ describe('SiteLogo', () => {
   let container: HTMLDivElement | undefined
 
   afterEach(() => {
-    vi.useRealTimers()
     act(() => root?.unmount())
     container?.remove()
-  })
-
-  function render(logoUrl?: string) {
-    container = document.createElement('div')
-    document.body.append(container)
-    root = createRoot(container)
-    let config = { siteLogo: logoUrl ? { url: logoUrl } : undefined } as ServerConfig
-    act(() => root!.render(
-      <ServerConfigContext.Provider value={config}>
-        <SiteLogo size={20}><span data-fallback>fallback</span></SiteLogo>
-      </ServerConfigContext.Provider>,
-    ))
-  }
-
-  function rerender(logoUrl?: string) {
-    let config = { siteLogo: logoUrl ? { url: logoUrl } : undefined } as ServerConfig
-    act(() => root!.render(
-      <ServerConfigContext.Provider value={config}>
-        <SiteLogo size={20}><span data-fallback>fallback</span></SiteLogo>
-      </ServerConfigContext.Provider>,
-    ))
-  }
-
-  it('renders the configured logo as a decorative contained image', () => {
-    render('/api/site-logo?v=revision')
-    let image = container!.querySelector('img')!
-    expect(image.getAttribute('src')).toBe('/api/site-logo?v=revision')
-    expect(image.getAttribute('alt')).toBe('')
-    expect(image.width).toBe(20)
-    expect(image.height).toBe(20)
-    expect(container!.querySelector('[data-fallback]')).toBeNull()
-  })
-
-  it('uses the supplied fallback when no logo is configured or loading fails', () => {
-    render()
-    expect(container!.querySelector('[data-fallback]')).not.toBeNull()
-
-    act(() => root!.unmount())
-    container!.remove()
     root = undefined
     container = undefined
-    render('/api/site-logo?v=revision')
-    act(() => container!.querySelector('img')!.dispatchEvent(new Event('error')))
-    expect(container!.querySelector('img')).toBeNull()
-    expect(container!.querySelector('[data-fallback]')).not.toBeNull()
-
-    rerender('/api/site-logo?v=revision')
-    expect(container!.querySelector('img')).not.toBeNull()
   })
 
-  it('uses an explicit null override for the Admin reset preview', () => {
-    render('/api/site-logo?v=configured')
-    const config = { siteLogo: { url: '/api/site-logo?v=configured' } } as ServerConfig
+  const render = (logoUrl?: string, srcOverride?: string | null) => {
+    if (!container) {
+      container = document.createElement('div')
+      document.body.append(container)
+      root = createRoot(container)
+    }
+    const config = { siteLogo: logoUrl ? { url: logoUrl } : undefined } as ServerConfig
     act(() => root!.render(
       <ServerConfigContext.Provider value={config}>
-        <SiteLogo size={20} srcOverride={null}>
-          <span data-fallback>fallback</span>
-        </SiteLogo>
+        <SiteLogo size={20} srcOverride={srcOverride}><span data-legacy>legacy</span></SiteLogo>
       </ServerConfigContext.Provider>,
     ))
+  }
+  const fallback = () => container!.querySelector<HTMLImageElement>('img[src^="data:"]')!
+  const custom = () => container!.querySelector<HTMLImageElement>('img:not([src^="data:"])')
 
-    expect(container!.querySelector('img')).toBeNull()
-    expect(container!.querySelector('[data-fallback]')).not.toBeNull()
+  it('bundles the actual mark, without an asset fetch or base-path dependency', () => {
+    render()
+    expect(decodeURIComponent(fallback().src)).toContain('M 1287.84 491.799')
+    expect(fallback().alt).toBe('')
+    expect(fallback().width).toBe(20)
+    expect(fallback().height).toBe(20)
+    expect(container!.querySelector('[data-legacy]')).toBeNull()
   })
 
+  it('keeps the mark visible until a configured logo loads', () => {
+    render('/os/api/site-logo?v=1')
+    expect(custom()!.getAttribute('src')).toBe('/os/api/site-logo?v=1')
+    expect(custom()!.style.visibility).toBe('hidden')
+    expect(fallback().style.visibility).not.toBe('hidden')
+    act(() => custom()!.dispatchEvent(new Event('load')))
+    expect(custom()!.style.visibility).not.toBe('hidden')
+    expect(fallback().style.visibility).toBe('hidden')
+  })
+
+  it('falls back on error, does not retry on config refresh, and retries a new URL', () => {
+    render('/os/api/site-logo?v=1')
+    act(() => custom()!.dispatchEvent(new Event('error')))
+    expect(custom()).toBeNull()
+    expect(fallback().style.visibility).not.toBe('hidden')
+    render('/os/api/site-logo?v=1')
+    expect(custom()).toBeNull()
+    render('/os/api/site-logo?v=2')
+    expect(custom()!.getAttribute('src')).toBe('/os/api/site-logo?v=2')
+    expect(fallback().style.visibility).not.toBe('hidden')
+  })
+
+  it('uses the bundled mark for the Admin reset preview', () => {
+    render('/os/api/site-logo?v=1', null)
+    expect(custom()).toBeNull()
+    expect(fallback()).not.toBeNull()
+  })
 })

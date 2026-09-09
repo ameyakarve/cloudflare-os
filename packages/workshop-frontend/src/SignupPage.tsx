@@ -85,7 +85,7 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
           className="flex h-full min-h-0 flex-col items-center justify-center gap-4 overflow-y-auto bg-kumo-base px-4 py-8"
         >
           <p className="text-sm text-kumo-danger text-center">
-            Couldn&apos;t load deployment settings.
+            Couldn&apos;t load sign-up settings.
           </p>
           <Button variant="secondary" onClick={() => window.location.reload()}>Reload</Button>
         </div>
@@ -142,7 +142,7 @@ export default function SignupPage({ rpcStub }: SignupPageProps) {
             title="Signups are closed"
             className="mb-4"
           >
-            New account registration is currently disabled on this deployment.
+            New account registration is currently unavailable.
           </Banner>
         )}
 

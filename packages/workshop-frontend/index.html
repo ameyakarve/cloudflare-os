@@ -7,11 +7,26 @@
     <!-- Prevents Gadget UI frames from navigating away from their srcdoc. DO NOT REMOVE. -->
     <meta http-equiv="Content-Security-Policy" content="frame-src srcdoc:;">
 
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="%BASE_URL%favicon.svg" />
+    <!-- Resolve mode before the bundle paints; storage can be unavailable. -->
+    <script>
+      (() => {
+        let mode = 'system';
+        try { mode = localStorage.getItem('gadgets:theme-mode') || mode; } catch {}
+        const dark = mode === 'dark' || (mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.mode = dark ? 'dark' : 'light';
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+      })();
+    </script>
+    <style>
+      html { background: #ffffff; color: #111111; }
+      html[data-mode="dark"] { background: #0b0b0b; color: #f4f4f4; }
+      .initial-mark { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+    </style>
     <title>MilesVault</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><img class="initial-mark" src="%BASE_URL%favicon.svg" width="48" height="48" alt="" /></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
