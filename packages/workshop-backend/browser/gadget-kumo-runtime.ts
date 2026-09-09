@@ -11,6 +11,7 @@ import {
 import { Compartment, EditorState } from "@codemirror/state";
 import { searchKeymap } from "@codemirror/search";
 import {
+  drawSelection,
   dropCursor,
   EditorView,
   highlightActiveLine,
@@ -126,6 +127,7 @@ function BeancountEditor({
           highlightActiveLineGutter(),
           highlightSpecialChars(),
           history(),
+          drawSelection(),
           dropCursor(),
           EditorState.allowMultipleSelections.of(true),
           indentOnInput(),
@@ -138,10 +140,10 @@ function BeancountEditor({
             document.documentElement.dataset.mode === "dark" ? "dark" : "light",
           )),
           EditorView.lineWrapping,
-          EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
           readOnlyCompartment.of([
             EditorState.readOnly.of(readOnly),
             EditorView.editable.of(!readOnly),
+            EditorView.contentAttributes.of({ "aria-label": ariaLabel, "aria-readonly": String(readOnly), tabindex: "0" }),
           ]),
           keymap.of([
             ...closeBracketsKeymap,
@@ -191,8 +193,9 @@ function BeancountEditor({
     view.dispatch({ effects: readOnlyCompartmentRef.current.reconfigure([
       EditorState.readOnly.of(readOnly),
       EditorView.editable.of(!readOnly),
+      EditorView.contentAttributes.of({ "aria-label": ariaLabel, "aria-readonly": String(readOnly), tabindex: "0" }),
     ]) });
-  }, [readOnly]);
+  }, [readOnly, ariaLabel]);
 
   React.useEffect(() => {
     const view = viewRef.current;
@@ -203,11 +206,15 @@ function BeancountEditor({
   }, [completionData]);
 
   React.useEffect(() => {
-    const apply = () => viewRef.current?.dispatch({
-      effects: themeCompartmentRef.current.reconfigure(beancountThemeExtensions(
-        document.documentElement.dataset.mode === "dark" ? "dark" : "light",
-      )),
-    });
+    const apply = () => {
+      const mode = document.documentElement.dataset.mode === "dark" ? "dark" : "light";
+      // Kumo's light-dark() host variables must switch alongside the editor compartment.
+      document.documentElement.style.colorScheme = mode;
+      viewRef.current?.dispatch({
+        effects: themeCompartmentRef.current.reconfigure(beancountThemeExtensions(mode)),
+      });
+    };
+    apply();
     const observer = new MutationObserver(apply);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
     return () => observer.disconnect();

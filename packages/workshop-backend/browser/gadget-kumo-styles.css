@@ -1,0 +1,4 @@
+/* Nest the complete upstream sheet, including its unlayered defaults, so authored CSS wins. */
+@layer gadget-brand-foreground, gadget-kumo, gadget-paper;
+@import "@cloudflare/kumo/styles/standalone" layer(gadget-kumo);
+@import "./gadget-kumo-paper.css";

@@ -23,7 +23,10 @@ export function upgradeLegacyLedgerServer(serverCode: string): string {
   return MANAGED_LEDGER_SERVER;
 }
 
-/** Prefixes a Gadget client with the real Cloudflare Kumo React library and standalone CSS. */
+/**
+ * Prefixes saved source on every UI read with the current Kumo library and bundled paper defaults.
+ * Styles are layered below authored CSS; no source migration or document theme attribute is needed.
+ */
 export function withGadgetKumo(clientCode: string): string {
   // Existing Gadgets own immutable copies of their blueprint source. Keep the old ABI only for
   // code that explicitly consumes it; new clients never receive or learn about the compatibility
@@ -35,7 +38,7 @@ export function withGadgetKumo(clientCode: string): string {
   const geoRuntime = clientCode.includes("GadgetGeo") ? `${GEO_RUNTIME}\n` : "";
   return `(() => {\n` +
     `  const style = document.createElement("style");\n` +
-    `  style.dataset.kumo = "2.9.2";\n` +
+    `  style.dataset.kumo = "paper-default";\n` +
     `  style.textContent = ${styles};\n` +
     `  document.head.append(style);\n` +
     `})();\n${KUMO_RUNTIME}\n${graphRuntime}${geoRuntime}${clientCode}`;

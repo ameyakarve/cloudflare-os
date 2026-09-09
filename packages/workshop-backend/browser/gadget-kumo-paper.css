@@ -1,0 +1,117 @@
+/* SDK defaults, deliberately layered below authored CSS. No document attributes are owned.
+   Paper palette matches workshop-shared/paper-theme.css; this skin also supports old helper ABIs. */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../../workshop-shared/src/fonts/inter-latin-wght-normal.woff2') format('woff2');
+}
+@layer gadget-paper {
+:where(:root, [data-theme="kumo"], [data-mode]) {
+  --font-sans: Inter, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --color-kumo-base: light-dark(#ffffff, #0b0b0b);
+  --color-kumo-elevated: light-dark(#ffffff, #161616);
+  --color-kumo-overlay: var(--color-kumo-base);
+  --color-kumo-recessed: light-dark(#f4f4f4, #161616);
+  --color-kumo-tint: light-dark(#f4f4f4, #262626);
+  --color-kumo-control: light-dark(#ffffff, #161616);
+  --color-kumo-fill: light-dark(#e0e0e0, #262626);
+  --color-kumo-fill-hover: light-dark(#d6d6d6, #393939);
+  --color-kumo-interact: light-dark(#d6d6d6, #525252);
+  --color-kumo-line: light-dark(#d6d6d6, #393939);
+  --color-kumo-ring: light-dark(#111111, #f4f4f4);
+  --color-kumo-brand: #f1c21b;
+  --color-kumo-brand-hover: #d2a800;
+  --color-kumo-contrast: #f1c21b;
+  --color-kumo-strong: #d2a800;
+  --color-kumo-bubble-user: var(--color-kumo-tint);
+  --text-color-kumo-default: light-dark(#111111, #f4f4f4);
+  --text-color-kumo-default-hover: var(--text-color-kumo-default);
+  --text-color-kumo-strong: var(--text-color-kumo-default);
+  --text-color-kumo-subtle: light-dark(#525252, #c6c6c6);
+  --text-color-kumo-inactive: light-dark(#6f6f6f, #8d8d8d);
+  --text-color-kumo-inverse: #111111;
+  --text-color-kumo-brand: light-dark(#695300, #f1c21b);
+  --text-color-kumo-link: var(--text-color-kumo-default);
+  /* Configurator runtime aliases. */
+  --color-kumo-default: var(--text-color-kumo-default);
+  --color-kumo-subtle: var(--text-color-kumo-subtle);
+  --color-kumo-inactive: var(--text-color-kumo-inactive);
+  --color-selection-bg: #f1c21b;
+  --color-selection-text: #111111;
+  --radius-xs: 0;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-2xl: 0;
+  --radius-3xl: 0;
+  --shadow-sm: 0 0 #0000;
+  --shadow-md: 0 0 #0000;
+  --shadow-lg: 0 0 #0000;
+  --shadow-xl: 0 0 #0000;
+  --shadow-2xl: 0 0 #0000;
+  --shadow-stack: 0 0 #0000;
+  --color-kumo-tip-shadow: transparent;
+  font-family: var(--font-sans);
+  --color-kumo-canvas: var(--color-kumo-base);
+  --color-kumo-hairline: var(--color-kumo-line);
+  --color-kumo-focus: var(--color-kumo-ring);
+  --text-color-kumo-placeholder: var(--text-color-kumo-inactive);
+  --color-kumo-shadow-edge: transparent;
+  --color-kumo-shadow-drop: transparent;
+  --color-kumo-arrow-edge: var(--color-kumo-line);
+  --color-kumo-arrow-stroke: var(--color-kumo-line);
+  --text-color-kumo-danger: light-dark(#b42318, #ff8389);
+  --color-kumo-danger: light-dark(#da1e28, #a2191f);
+  --color-kumo-danger-tint: light-dark(#fff1f1, #320c0f);
+  /* Semantic states stay semantic, including when mode comes only from the host media query. */
+  --text-color-kumo-info: light-dark(#0043ce, #78a9ff);
+  --text-color-kumo-success: light-dark(#0e6027, #42be65);
+  --text-color-kumo-warning: light-dark(#695300, #f1c21b);
+  --color-kumo-info: light-dark(#0f62fe, #4589ff);
+  --color-kumo-info-tint: light-dark(#edf5ff, #001d6c);
+  --color-kumo-success: light-dark(#198038, #42be65);
+  --color-kumo-success-tint: light-dark(#defbe6, #022d0d);
+  --color-kumo-warning: #f1c21b;
+  --color-kumo-warning-tint: light-dark(#fff8d6, #332b00);
+  --color-kumo-banner-info: var(--color-kumo-info-tint);
+  --color-kumo-banner-warning: var(--color-kumo-warning-tint);
+  --text-color-kumo-badge-orange-subtle: var(--text-color-kumo-warning);
+  --text-color-kumo-badge-teal-subtle: light-dark(#005d5d, #3ddbd9);
+  --text-color-kumo-badge-neutral-subtle: var(--text-color-kumo-subtle);
+  --text-color-kumo-badge-inverted: light-dark(#ffffff, #111111);
+  --color-kumo-badge-red: var(--color-kumo-danger);
+  --color-kumo-badge-green: light-dark(#198038, #0e6027);
+  --color-kumo-badge-orange: #8a3800;
+  --color-kumo-badge-purple: light-dark(#6929c4, #491d8b);
+  --color-kumo-badge-teal: light-dark(#007d79, #005d5d);
+  --color-kumo-badge-blue: light-dark(#0043ce, #002d9c);
+  --color-kumo-badge-neutral: light-dark(#6f6f6f, #525252);
+  --color-kumo-badge-inverted: light-dark(#111111, #ffffff);
+}
+:root { color-scheme: light dark; }
+[data-mode="light"] { color-scheme: light; }
+[data-mode="dark"] { color-scheme: dark; }
+body { margin: 0; background: var(--color-kumo-base); color: var(--text-color-kumo-default); }
+}
+/* Important order is reversed: this layer precedes Kumo's important white emphasis rule.
+   Only brand emphasis is corrected; authored inline colors and danger are not matched. */
+@layer gadget-brand-foreground {
+  :is([data-kumo-component="Button"], [data-kumo-component="LinkButton"])[style*="--kumo-button-emphasis"][style*="--color-kumo-brand"]:not([style*="color:"]):not([style*="color :"]) {
+    color: var(--gadget-kumo-brand-foreground, #111111) !important;
+  }
+}
+@layer gadget-paper {
+  :is([data-kumo-component="Button"], [data-kumo-component="LinkButton"])[style*="--kumo-button-emphasis"][style*="--color-kumo-brand"] {
+    background: var(--color-kumo-brand);
+  }
+  :is([data-kumo-component="Button"], [data-kumo-component="LinkButton"])[style*="--kumo-button-emphasis"][style*="--color-kumo-brand"]:hover:not(:disabled) {
+    background: var(--color-kumo-brand-hover);
+  }
+  :is([data-kumo-component="Button"], [data-kumo-component="LinkButton"])[style*="--kumo-button-emphasis"][style*="--color-kumo-brand"] > span[aria-hidden="true"] {
+    display: none;
+  }
+}

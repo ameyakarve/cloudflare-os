@@ -70,7 +70,24 @@ const geoRuntimeResult = await build({
 const kumoRuntimeBytes = kumoRuntimeResult.outputFiles[0].contents;
 const graphRuntimeBytes = graphRuntimeResult.outputFiles[0].contents;
 const geoRuntimeBytes = geoRuntimeResult.outputFiles[0].contents;
-const kumoStylesBytes = readFileSync(fileURLToPath(import.meta.resolve("@cloudflare/kumo/styles/standalone")));
+// Bundle the actual upstream stylesheet and SDK defaults, including the local Inter font.
+// No deploy-time CSS rewriting: cascade layers are reviewable source.
+const cssOptions = {
+  bundle: true,
+  minify: true,
+  write: false,
+  loader: { ".woff2": "dataurl" },
+};
+const kumoStylesResult = await build({
+  ...cssOptions,
+  entryPoints: [resolve(packageDir, "browser/gadget-kumo-styles.css")],
+});
+const legacyStylesResult = await build({
+  ...cssOptions,
+  entryPoints: [resolve(packageDir, "browser/gadget-kumo-legacy.css")],
+});
+const kumoStylesBytes = kumoStylesResult.outputFiles[0].contents;
+writeIfChanged(resolve(packageDir, "src/generated/gadget-kumo-legacy-styles.txt"), legacyStylesResult.outputFiles[0].contents);
 assertContains(kumoRuntimeBytes, ".Kumo=Object.freeze", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Button:", "Kumo browser runtime");
 assertContains(kumoRuntimeBytes, "Textarea:", "Kumo browser runtime");

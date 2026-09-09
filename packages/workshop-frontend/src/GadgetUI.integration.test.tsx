@@ -191,6 +191,10 @@ describe('GadgetUI RPC recovery', () => {
     const iframe = container.querySelector('iframe')!
     expect(iframe.srcdoc).toContain('<html data-mode="light" style="color-scheme: light">')
     expect(iframe.srcdoc).toContain('gadget-theme')
+    expect(iframe.srcdoc).toContain('font-src data:;')
+    expect(iframe.srcdoc).toContain("connect-src 'none';")
+    expect(iframe.srcdoc).toContain("frame-src 'none';")
+    expect(iframe.srcdoc).not.toMatch(/font-src[^;]*(?:https?:|\*)/)
 
     const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage')
     themeMock.resolvedThemeMode = 'dark'

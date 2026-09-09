@@ -9,11 +9,17 @@ import { EditorView, type EditorViewConfig } from "@codemirror/view";
 import { styleTags, tags } from "@lezer/highlight";
 import { parser as beancountParser } from "lezer-beancount";
 
+/** Beancount grammar and semantic tags shared by SDK and review editors. */
 export const beancountLanguage = new LanguageSupport(LRLanguage.define({
   parser: beancountParser.configure({
     props: [styleTags({
       Date: tags.literal,
-      TxnFlag: tags.operator,
+      "TxnFlag TxnKeyword": tags.operator,
+      LineComment: tags.lineComment,
+      "Tag Link": tags.labelName,
+      MetadataKey: tags.propertyName,
+      BooleanValue: tags.bool,
+      "ArithOp ArithMult PriceOp": tags.operator,
       String: tags.string,
       Account: tags.variableName,
       Number: tags.number,
@@ -28,12 +34,15 @@ const monoFont =
   'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
 const beancountHighlightLight = HighlightStyle.define([
-  { tag: tags.literal, color: "#3a72c9" },
+  { tag: tags.literal, color: "#235caa" },
   { tag: tags.operator, color: "#6b6157", fontWeight: "700" },
-  { tag: tags.string, color: "#4d8a44" },
-  { tag: tags.variableName, color: "#1f1d1a" },
-  { tag: tags.number, color: "#b56a1f", fontWeight: "700" },
-  { tag: tags.unit, color: "#3a72c9" },
+  { tag: tags.string, color: "#27672e" },
+  { tag: tags.variableName, color: "#783ca0" },
+  { tag: tags.number, color: "#985000", fontWeight: "700" },
+  { tag: tags.unit, color: "#006b70" },
+  { tag: tags.lineComment, color: "#606773", fontStyle: "italic" },
+  { tag: [tags.labelName, tags.propertyName], color: "#795420" },
+  { tag: tags.bool, color: "#8e3aa6" },
   { tag: tags.keyword, color: "#8e3aa6", fontWeight: "700" },
 ]);
 
@@ -41,9 +50,12 @@ const beancountHighlightDark = HighlightStyle.define([
   { tag: tags.literal, color: "#93c5fd" },
   { tag: tags.operator, color: "#b9b5c8", fontWeight: "700" },
   { tag: tags.string, color: "#86efac" },
-  { tag: tags.variableName, color: "#e8e6f0" },
+  { tag: tags.variableName, color: "#d8b4fe" },
   { tag: tags.number, color: "#fbbf24", fontWeight: "700" },
-  { tag: tags.unit, color: "#93c5fd" },
+  { tag: tags.unit, color: "#67e8f9" },
+  { tag: tags.lineComment, color: "#a8aeb9", fontStyle: "italic" },
+  { tag: [tags.labelName, tags.propertyName], color: "#f4cf92" },
+  { tag: tags.bool, color: "#d8b4fe" },
   { tag: tags.keyword, color: "#d8b4fe", fontWeight: "700" },
 ]);
 
@@ -56,8 +68,14 @@ const editorTheme = (
   dark: boolean,
 ) =>
   EditorView.theme({
-    "&": { color: text, backgroundColor: "transparent", height: "100%", fontSize: "13px" },
-    "&.cm-focused": { outline: "none" },
+    "&": {
+      color: text,
+      colorScheme: dark ? "dark" : "light",
+      backgroundColor: `var(--color-kumo-base, ${dark ? "#0b0b0b" : "#ffffff"})`,
+      height: "100%",
+      fontSize: "13px",
+    },
+    "&.cm-focused": { outline: `2px solid ${accent}`, outlineOffset: "-2px" },
     ".cm-scroller": {
       fontFamily: monoFont,
       lineHeight: "1.7",
@@ -76,10 +94,11 @@ const editorTheme = (
     ".cm-line": { padding: "0 16px" },
     ".cm-gutters": { backgroundColor: "transparent", border: "none", color: gutter, fontSize: "12px" },
     ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 14px", minWidth: "28px" },
-    ".cm-activeLine": { backgroundColor: "var(--color-kumo-fill)" },
+    // Keep the drawn selection visible underneath the active-line decoration.
+    ".cm-activeLine": { backgroundColor: dark ? "#ffffff08" : "#00000005" },
     ".cm-activeLineGutter": { backgroundColor: "transparent", color: muted },
     ".cm-cursor, .cm-dropCursor": { borderLeftColor: text },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
+    "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, & > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-content::selection, .cm-content ::selection": {
       backgroundColor: selection,
     },
     ".cm-tooltip": {
@@ -100,12 +119,13 @@ const editorTheme = (
   }, { dark });
 
 const beancountThemeLight = editorTheme(
-  "#1f1d1a", "#6b6157", "#bdb7ae", "#3a72c9", "#b3d4ff", false,
+  "#1f1d1a", "#6b6157", "#606773", "#235caa", "#dbeafe", false,
 );
 const beancountThemeDark = editorTheme(
-  "#e8e6f0", "#b9b5c8", "#6d6880", "#93c5fd", "#4b3d66", true,
+  "#e8e6f0", "#b9b5c8", "#a8aeb9", "#93c5fd", "#352b49", true,
 );
 
+/** Syntax and accessible chrome for the host's current color mode. */
 export const beancountThemeExtensions = (mode: "light" | "dark") => mode === "dark"
   ? [syntaxHighlighting(beancountHighlightDark), beancountThemeDark]
   : [syntaxHighlighting(beancountHighlightLight), beancountThemeLight];
@@ -117,8 +137,11 @@ const readonlySnippetTheme = EditorView.theme({
   ".cm-line": { padding: "0 12px" },
 });
 
+/** Lifecycle of a non-editable journal preview. */
 export type ReadonlyBeancountEditor = {
+  /** Release the view and listeners. */
   destroy(): void;
+  /** Update host colors without replacing the document. */
   setMode(mode: "light" | "dark"): void;
 };
 
@@ -146,7 +169,7 @@ export function createReadonlyBeancountEditor({
         beancountLanguage,
         theme.of(beancountThemeExtensions(mode)),
         readonlySnippetTheme,
-        EditorView.contentAttributes.of({ "aria-label": ariaLabel, "aria-readonly": "true" }),
+        EditorView.contentAttributes.of({ "aria-label": ariaLabel, "aria-readonly": "true", tabindex: "0" }),
       ],
     }),
   });
