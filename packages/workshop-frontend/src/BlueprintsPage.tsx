@@ -52,7 +52,7 @@ export default function BlueprintsPage() {
         );
       })
       .catch((err) => {
-        console.error("Failed to load Explore data:", err);
+        console.error("Failed to load featured templates:", err);
         toastsRef.current.add({
           title: "Failed to load featured templates",
           variant: "error",
@@ -77,17 +77,16 @@ export default function BlueprintsPage() {
   });
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-3 sm:px-10">
-      <header className="flex items-end justify-between gap-4 px-3 pb-4 pt-6 sm:pt-10">
+    <div className="flex h-full flex-col">
+      <div className="flex items-end justify-between gap-4 px-3 pb-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-kumo-default">Explore</h1>
           <p className="mt-1 text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
             Discover featured templates to use as starting points. Open one to create a workspace
             from it, or save it to reuse later.
           </p>
         </div>
         <ViewToggle view={view} onChange={setView} />
-      </header>
+      </div>
 
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-3 px-3 pb-3">

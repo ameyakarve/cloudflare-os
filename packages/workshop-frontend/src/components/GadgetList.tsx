@@ -596,10 +596,11 @@ function FeaturedBlueprintsGallery() {
       {hasMore && (
         <div className="mt-4 text-center">
           <Link
-            to="/explore"
+            to="/blueprints"
+            search={{ tab: 'browse' }}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-kumo-brand hover:text-kumo-brand-hover transition-colors"
           >
-            Browse all templates
+            Browse templates
             <ArrowRight size={12} weight="bold" />
           </Link>
         </div>

@@ -756,8 +756,8 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
       <BlueprintStatePage
         title="Template not found"
         message="This template may have been removed or the link may be incorrect."
-        actionLabel="Back to Explore"
-        onAction={() => navigate({ to: '/explore' })}
+        actionLabel="Browse templates"
+        onAction={() => navigate({ to: '/blueprints', search: { tab: 'browse' } })}
       />
     )
   }
@@ -767,8 +767,8 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
       <BlueprintStatePage
         title="Couldn’t load template"
         message={error || 'Failed to load template.'}
-        actionLabel="Back to Explore"
-        onAction={() => navigate({ to: '/explore' })}
+        actionLabel="Browse templates"
+        onAction={() => navigate({ to: '/blueprints', search: { tab: 'browse' } })}
       />
     )
   }
@@ -804,7 +804,7 @@ export default function BlueprintLandingPage({ rpcStub }: Props) {
             if (router.history.canGoBack()) {
               router.history.back()
             } else {
-              navigate({ to: '/explore' })
+              navigate({ to: '/blueprints', search: { tab: isOwnBlueprint || isInLibrary ? 'saved' : 'browse' } })
             }
           }}
           className="mb-8 inline-flex cursor-pointer items-center gap-2 px-1 py-1 text-[13px] leading-[18px] font-medium tracking-[-0.25px] text-kumo-subtle transition-[color,transform] duration-150 ease-out hover:text-kumo-default active:scale-[0.98]"

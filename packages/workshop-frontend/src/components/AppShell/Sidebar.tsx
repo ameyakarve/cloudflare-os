@@ -2,7 +2,6 @@ import { Link } from '@tanstack/react-router'
 import {
   Blueprint,
   BookOpen,
-  Compass,
   Hexagon,
   House,
   MagnifyingGlass,
@@ -180,12 +179,6 @@ export default function Sidebar({
               />
               )
             })}
-            <SidebarItem
-              to="/explore"
-              label="Explore"
-              icon={<Compass size={14} weight="regular" />}
-              collapsed={collapsed}
-            />
           </nav>
 
           {/* Workspace tools: search. Pinned so it's always reachable. */}
