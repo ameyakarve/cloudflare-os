@@ -253,7 +253,7 @@ function unavailableGatekeeperVendorInfo(id: string): GatekeeperVendorInfo {
       displayName: id,
       url: "",
       tagline: "Temporarily unavailable",
-      description: "This gatekeeper could not be loaded.",
+      description: "This connection could not be loaded. Try again shortly.",
     },
     supportedResources: [],
   };
@@ -1077,7 +1077,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   async addBlueprintToLibrary(id: string): Promise<void> {
     let kvRecord = await readBlueprintKvRecord(this.env, id);
     if (!kvRecord) {
-      throw new Error("Blueprint not found.");
+      throw new Error("Template not found.");
     }
 
     let existing = this.storage.libraryBlueprints.get(id);
@@ -1117,7 +1117,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
 
   async deleteOwnedBlueprint(id: string): Promise<void> {
     if (isReservedBlueprintKey(id)) {
-      throw new Error("Blueprint not found.");
+      throw new Error("Template not found.");
     }
 
     let publishedRecord = this.storage.blueprints.get(id);
@@ -1126,12 +1126,12 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     let kvRecord = await readBlueprintKvRecord(this.env, id);
 
     if (!publishedRecord && !uploadedRecord && !kvRecord) {
-      throw new Error("Blueprint not found.");
+      throw new Error("Template not found.");
     }
 
     if (kvRecord) {
       if (kvRecord.ownerId !== this.ctx.id.toString()) {
-        throw new Error("You don't own this blueprint.");
+        throw new Error("You don't own this template.");
       }
 
       // Delete all R2 objects with the blueprint ID prefix.
@@ -1282,7 +1282,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       throw new Error("No such service: " + vendorId);
     }
     if ((await readAdminConfig(this.env)).disabledGatekeepers.includes(vendorId.toLowerCase())) {
-      throw new Error(`The "${vendorId}" gatekeeper is disabled on this deployment.`);
+      throw new Error(`The "${vendorId}" connection is disabled. Contact your administrator for access.`);
     }
 
     let accountId = this.storage.nextAccountId.get();
@@ -1388,12 +1388,12 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     if (!vendor) throw new Error("No such service: " + vendorId);
 
     if (ambientGatekeeperMode(await readAdminConfig(this.env), vendorId) === "disabled") {
-      throw new Error(`The "${vendorId}" gatekeeper is disabled on this deployment.`);
+      throw new Error(`The "${vendorId}" connection is disabled. Contact your administrator for access.`);
     }
 
     let description = await vendor.describe();
     if (!description.autoProvisionsAccount) {
-      throw new Error(`The "${vendorId}" gatekeeper can't be added this way.`);
+      throw new Error(`The "${vendorId}" connection can't be added this way. Open Connections to see available options.`);
     }
 
     if (this.#hasAccountForVendor(vendorId)) return;  // already added

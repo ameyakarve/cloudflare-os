@@ -16,39 +16,39 @@ import type { ScheduleStatus } from "../src/types";
 import { formatCadence, formatOccurrences, formatTiming } from "./format";
 
 export const CREATE_SCHEDULE_PROMPT =
-  "Help me create a scheduled task. Ask me what it should do, which workspace and resources it should use, when it should run, and which timezone to use. Then set up the schedule.";
+  "Help me create a scheduled task. Ask me what it should do, which workspace and connected information it should use, when it should run, and which timezone to use. Then set up the schedule.";
 
 const STARTERS = [
   {
-    title: "Daily brief",
-    cadence: "Weekdays at 8:00 AM",
-    description: "Your calendar for the day plus the unread mail that needs a reply",
-    prompt:
-      "Every weekday at 8:00 AM, send me a short brief of my calendar for the day and the unread email that needs a reply. Ask me which calendar and mailbox to use and which timezone to use, then set up the schedule.",
-    icon: CalendarBlank,
-  },
-  {
-    title: "Weekly roundup",
+    title: "Weekly review",
     cadence: "Fridays at 4:00 PM",
-    description: "Turn the week’s Linear issues and GitHub pull requests into a status update",
+    description: "Review information you choose from your connected accounts",
     prompt:
-      "Every Friday at 4:00 PM, turn this week’s Linear issues and GitHub pull requests into a status update. Ask me which Linear team, GitHub repositories, and timezone to use, then set up the schedule.",
+      "Help me set up a weekly review of information I choose from my connected accounts. Confirm what data is available, the workspace, time and timezone, and where I will read the result before setting up the schedule. Do not change account data.",
     icon: CalendarBlank,
   },
   {
-    title: "Follow-up monitor",
-    cadence: "Weekdays at 9:00 AM",
-    description: "Flag the Gmail threads that are waiting on your reply",
+    title: "Monthly summary",
+    cadence: "First day of the month",
+    description: "Bring together the updates you want to keep track of",
     prompt:
-      "Every weekday at 9:00 AM, flag the Gmail threads that are waiting on my reply. Ask me which mailbox, destination, and timezone to use, then set up the schedule.",
+      "Help me schedule a monthly summary of information I want to track. Ask which connected data and workspace to use, confirm available access, time and timezone, and where the result should appear. Do not assume any external messaging service is connected.",
+    icon: CalendarBlank,
+  },
+  {
+    title: "Check for changes",
+    cadence: "Choose a frequency",
+    description: "Compare available information against a saved baseline",
+    prompt:
+      "Help me schedule a check for changes in information I choose. Confirm the connected source, saved baseline, frequency, timezone and where I will read the result. Explain any gaps in the data; do not promise live monitoring or availability that the source does not provide.",
     icon: WarningCircle,
   },
   {
-    title: "Metrics snapshot",
-    cadence: "Mondays at 8:00 AM",
-    description: "Refresh a spreadsheet or query and call out what moved",
+    title: "Refresh a Gadget",
+    cadence: "Choose a frequency",
+    description: "Keep a reusable view up to date with its connected information",
     prompt:
-      "Every Monday at 8:00 AM, refresh a spreadsheet or query and call out what moved. Ask me which data source, destination, and timezone to use, then set up the schedule.",
+      "Help me schedule a refresh of an existing Gadget. Ask which Gadget and connected information to use, confirm that refresh is supported, and agree the frequency and timezone before creating the task. Preserve my existing work and do not change account data.",
     icon: Clock,
   },
 ] as const;
@@ -181,7 +181,7 @@ export default function SchedulerPage({
             Scheduled tasks
           </h1>
           <p className="mt-1 text-sm text-kumo-subtle">
-            Wake a workspace and run its code on a schedule you choose.
+            Run workspace tasks on a schedule you choose.
           </p>
         </div>
         <button

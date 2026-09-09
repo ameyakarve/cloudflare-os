@@ -6,12 +6,30 @@ export interface GatekeeperAppTheme {
   mode: "light" | "dark";
   /** The deployment accent seed, or null to use the app's base palette. */
   accentColor: string | null;
+  /** Optional bundled full skin. Omission preserves the receiver's default; "base" opts out.
+   * Paper fixes accessible ink-on-yellow actions rather than deriving them from the accent seed.
+   * Only trusted first-party frames should load the matching paper-theme.css stylesheet.
+   */
+  skin?: "base" | "paper";
 }
 
 /** A sandboxed gatekeeper app capability that receives complete appearance updates. */
 export interface GatekeeperAppThemeReceiver extends RpcTarget {
   /** Applies the latest Workshop appearance state. */
   setTheme(theme: GatekeeperAppTheme): void;
+}
+
+/** Apply a bundled full skin to a trusted frame root, retaining legacy accent-only support.
+ * Load paper-theme.css in that frame; this never injects CSS into user-authored gadgets.
+ */
+export function applyGatekeeperAppTheme(
+  root: { style: StylePropertyTarget; setAttribute(name: string, value: string): void },
+  theme: GatekeeperAppTheme,
+  defaultSkin: "base" | "paper" = "base",
+): void {
+  const skin = theme.skin ?? defaultSkin;
+  root.setAttribute("data-skin", skin);
+  applyAccentColor(root.style, skin === "paper" ? null : theme.accentColor);
 }
 
 interface StylePropertyTarget {

@@ -1,6 +1,7 @@
 @source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
 @import "@cloudflare/kumo/styles";
 @import "tailwindcss";
+@import "@gadgets/workshop-shared/paper-theme.css";
 @custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
 
 html,
@@ -348,7 +349,7 @@ html {
   font-weight: 600;
   line-height: 1.25;
   margin: 1em 0 0.4em;
-  color: var(--color-kumo-strong);
+  color: var(--text-color-kumo-strong);
 }
 .kb-mdx-content h1 { font-size: 1.6em; }
 .kb-mdx-content h2 { font-size: 1.35em; }
@@ -370,7 +371,7 @@ html {
 .kb-mdx-content li > ul,
 .kb-mdx-content li > ol { margin: 0.2em 0; }
 .kb-mdx-content a {
-  color: var(--color-kumo-brand);
+  color: var(--text-color-kumo-link);
   text-decoration: underline;
 }
 .kb-mdx-content strong { font-weight: 700; }

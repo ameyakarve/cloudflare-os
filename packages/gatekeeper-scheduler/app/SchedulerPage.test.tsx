@@ -121,10 +121,10 @@ describe("SchedulerPage", () => {
 
     // Only the failed schedule gets a caret; healthy rows have nothing to expand.
     expect(container!.querySelectorAll('[data-action="toggle-diagnostic"]')).toHaveLength(1);
-    expect(container!.textContent).not.toContain("Task callback failed after retries.");
+    expect(container!.textContent).not.toContain("The task failed after several attempts.");
 
     await click('[data-action="toggle-diagnostic"]');
-    expect(container!.textContent).toContain("Task callback failed after retries.");
+    expect(container!.textContent).toContain("The task failed after several attempts.");
     expect(container!.textContent).not.toContain(dead.description);
   });
 

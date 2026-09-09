@@ -498,11 +498,14 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   ): Promise<RpcStub<Overseer>> {
     // 1. Read blueprint from KV.
     let kvRecord = await readBlueprintKvRecord(this.env, blueprintId);
-    if (!kvRecord) throw new Error("Blueprint not found.");
+    if (!kvRecord) throw new Error("Template not found.");
 
     // 2. Read gzip-compressed Yjs doc from R2 and decompress.
     let codeBytes = await readBlueprintContent(this.env, blueprintId, kvRecord.metadata.version);
-    if (!codeBytes) throw new Error("Blueprint content not found in R2.");
+    if (!codeBytes) {
+      logger.warn("Blueprint content not found in R2", { event: "blueprint.content.missing", blueprintId });
+      throw new Error("Template content is unavailable. Try again or choose another template.");
+    }
 
     // 3. Create new Overseer DO (same as newGadget()). Deployment-owned system outputs first
     // claim a stable per-user slot, so every creation path opens the existing Ledger instead of
@@ -557,7 +560,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
         if (assignment.type === "gatekeeper") {
           gk = await overseerResult.newGatekeeper(assignment.accountId, assignment.resourceUrl);
           if (!gk) {
-            throw new Error(`Failed to create gatekeeper for binding "${bindingName}".`);
+            throw new Error(`Could not set up the "${bindingName}" connection for this template.`);
           }
         } else if (assignment.type === "aiModel") {
           gk = await overseerResult.newAiModelGatekeeper(assignment.modelId);
@@ -731,7 +734,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
       throw new Error(`Sign-in via "${vendorId}" is not enabled on this deployment.`);
     }
     const vendor = getAuthVendorBinding(this.env, vendorId);
-    if (!vendor) throw new Error(`No such auth gatekeeper: ${vendorId}`);
+    if (!vendor) throw new Error(`The "${vendorId}" sign-in service is unavailable.`);
     const desc = await vendor.describe();
     if (!desc.providesAuth) throw new Error(`"${vendorId}" does not provide authentication.`);
 
@@ -867,10 +870,13 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
 
   async downloadBlueprint(id: string): Promise<ReadableStream<Uint8Array>> {
     let kvRecord = await readBlueprintKvRecord(this.env, id);
-    if (!kvRecord) throw new Error("Blueprint not found.");
+    if (!kvRecord) throw new Error("Template not found.");
 
     let r2Object = await this.env.BLUEPRINT_CONTENT.get(`${id}/${kvRecord.metadata.version}`);
-    if (!r2Object) throw new Error("Blueprint content not found in R2.");
+    if (!r2Object) {
+      logger.warn("Blueprint content not found in R2", { event: "blueprint.content.missing", blueprintId: id });
+      throw new Error("Template content is unavailable. Try again or choose another template.");
+    }
 
     let metadata = { ...kvRecord.metadata };
     delete metadata.screenshot;
@@ -935,7 +941,7 @@ export default {
         if (env.MILESVAULT_AUTH === "true") {
           const ledgerKey = req.headers.get("x-milesvault-user");
           if (!ledgerKey || ledgerKey.length > 254 || /\s/.test(ledgerKey)) {
-            return new Response("Missing trusted MilesVault identity.", { status: 403 });
+            return new Response("Your session could not be verified. Sign in to MilesVault again.", { status: 403 });
           }
           // OS keeps a normalized account identity; the existing MilesVault Durable Object key
           // remains exact and case-sensitive, and is carried separately to the Ledger output.

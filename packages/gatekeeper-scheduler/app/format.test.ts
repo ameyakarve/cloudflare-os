@@ -56,7 +56,7 @@ describe("formatTiming", () => {
     expect(formatTiming(active, now).relative).toBe("Next run in 2 hours");
     expect(formatTiming(dead, now)).toMatchObject({
       relative: "Failed 1 minute ago",
-      diagnostic: "Authorization failed after retries.",
+      diagnostic: "Permission checks failed after several attempts.",
     });
   });
 

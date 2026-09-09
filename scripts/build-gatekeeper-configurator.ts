@@ -69,6 +69,12 @@ async function createExceptionSerializerImport(): Promise<string> {
 }
 
 async function createConfiguratorHtml(configuratorUIModuleSource: string): Promise<string> {
+  // Bundle the trusted UI skin and font: opaque frames retain zero network access.
+  const skinDir = resolve(import.meta.dirname, "../packages/workshop-shared/src");
+  const paperTheme = (await readFile(join(skinDir, "paper-theme.css"), "utf8")).replace(
+    "./fonts/inter-latin-wght-normal.woff2",
+    `data:font/woff2;base64,${(await readFile(join(skinDir, "fonts/inter-latin-wght-normal.woff2"))).toString("base64")}`,
+  );
   const capnwebBase64 = Buffer.from(`//# sourceURL=${sourceBase}/capnweb.js\n${await getCapnwebBundle()}`, "utf8").toString("base64");
   const exceptionSerializerImport = frontendReportingEnabled
     ? await createExceptionSerializerImport()
@@ -860,9 +866,9 @@ window.addEventListener("touchmove", event => {
 `;
 
   return `<!DOCTYPE html>
-<html>
+<html data-skin="paper">
 <head>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; script-src data: 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none'; navigate-to 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; script-src data: 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; font-src data:; img-src data:; media-src data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none'; navigate-to 'none';">
   <style>
     :root {
       color-scheme: light dark;
@@ -958,6 +964,10 @@ window.addEventListener("touchmove", event => {
     .radio-title { font-weight: 600; }
     .radio-description { color: var(--color-kumo-subtle, #7d746c); font-size: 12px; line-height: 16px; }
     .error { white-space: pre-wrap; color: var(--color-kumo-danger); border: 1px solid var(--color-kumo-danger-line); border-radius: 10px; padding: 10px; background: var(--color-kumo-danger-tint); }
+    ${paperTheme}
+    :root[data-skin="paper"] :is(.input, .autocomplete-popup, .radio-card, .checkbox-row, .checkbox-meta, .error) { border-radius: 0; }
+    :root[data-skin="paper"] .autocomplete-popup { box-shadow: none; }
+    :root[data-skin="paper"] .input:focus { box-shadow: none; outline: 2px solid var(--color-kumo-ring); outline-offset: 1px; }
   </style>
 </head>
 <body>

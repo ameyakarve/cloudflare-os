@@ -87,8 +87,8 @@ export function formatTiming(
       absolute,
       diagnostic:
         schedule.failureCode === "authorization_failed"
-          ? "Authorization failed after retries."
-          : "Task callback failed after retries.",
+          ? "Permission checks failed after several attempts."
+          : "The task failed after several attempts.",
     };
   }
   if (schedule.status === "completed") {

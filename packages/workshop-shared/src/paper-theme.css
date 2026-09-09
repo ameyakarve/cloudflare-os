@@ -1,0 +1,76 @@
+/* Opt-in full skin for trusted first-party UI only. Mode uses the host's color-scheme.
+   No selectors or assets are injected into arbitrary gadget documents. */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./fonts/inter-latin-wght-normal.woff2') format('woff2');
+}
+:root[data-skin="paper"] {
+  --font-sans: Inter, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --color-kumo-base: light-dark(#ffffff, #0b0b0b);
+  --color-kumo-elevated: light-dark(#ffffff, #161616);
+  --color-kumo-overlay: var(--color-kumo-base);
+  --color-kumo-recessed: light-dark(#f4f4f4, #161616);
+  --color-kumo-tint: light-dark(#f4f4f4, #262626);
+  --color-kumo-control: light-dark(#ffffff, #161616);
+  --color-kumo-fill: light-dark(#e0e0e0, #262626);
+  --color-kumo-fill-hover: light-dark(#d6d6d6, #393939);
+  --color-kumo-interact: light-dark(#d6d6d6, #525252);
+  --color-kumo-line: light-dark(#d6d6d6, #393939);
+  --color-kumo-ring: light-dark(#111111, #f4f4f4);
+  --color-kumo-brand: #f1c21b;
+  --color-kumo-brand-hover: #d2a800;
+  --color-kumo-contrast: #f1c21b;
+  --color-kumo-strong: #d2a800;
+  --color-kumo-bubble-user: var(--color-kumo-tint);
+  --text-color-kumo-default: light-dark(#111111, #f4f4f4);
+  --text-color-kumo-default-hover: var(--text-color-kumo-default);
+  --text-color-kumo-strong: var(--text-color-kumo-default);
+  --text-color-kumo-subtle: light-dark(#525252, #c6c6c6);
+  --text-color-kumo-inactive: light-dark(#6f6f6f, #8d8d8d);
+  --text-color-kumo-inverse: #111111;
+  --text-color-kumo-brand: light-dark(#695300, #f1c21b);
+  --text-color-kumo-link: var(--text-color-kumo-default);
+  /* Configurator runtime aliases. */
+  --color-kumo-default: var(--text-color-kumo-default);
+  --color-kumo-subtle: var(--text-color-kumo-subtle);
+  --color-kumo-inactive: var(--text-color-kumo-inactive);
+  --color-selection-bg: #f1c21b;
+  --color-selection-text: #111111;
+  --radius-xs: 0;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-2xl: 0;
+  --radius-3xl: 0;
+  --shadow-sm: 0 0 #0000;
+  --shadow-md: 0 0 #0000;
+  --shadow-lg: 0 0 #0000;
+  --shadow-xl: 0 0 #0000;
+  --shadow-2xl: 0 0 #0000;
+  --shadow-stack: 0 0 #0000;
+  --color-kumo-tip-shadow: transparent;
+  font-family: var(--font-sans);
+}
+/* Kumo emphasis buttons hardcode important white text. Correct only brand actions;
+   destructive emphasis keeps its own danger foreground and background. */
+@layer utilities {
+  :root[data-skin="paper"] :is([data-kumo-component="Button"], [data-kumo-component="LinkButton"])[style*="--kumo-button-emphasis"][style*="--color-kumo-brand"] {
+    color: #111111 !important;
+    background: var(--color-kumo-brand);
+  }
+  :root[data-skin="paper"] :is([data-kumo-component="Button"], [data-kumo-component="LinkButton"])[style*="--kumo-button-emphasis"][style*="--color-kumo-brand"]:hover:not(:disabled) {
+    background: var(--color-kumo-brand-hover);
+  }
+}
+:root[data-skin="paper"] :is([data-kumo-component="Button"], [data-kumo-component="LinkButton"])[style*="--kumo-button-emphasis"][style*="--color-kumo-brand"] > span[aria-hidden="true"] {
+  display: none;
+}
+/* Keep focus rings and danger colors; only yellow action foregrounds need remapping. */
+:root[data-skin="paper"] :is(.bg-kumo-brand, .\!bg-kumo-brand) {
+  color: #111111;
+}

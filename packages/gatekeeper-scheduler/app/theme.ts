@@ -1,5 +1,5 @@
 import {
-  applyAccentColor,
+  applyGatekeeperAppTheme,
   type GatekeeperAppTheme,
 } from "@gadgets/workshop-shared/theme";
 
@@ -12,5 +12,5 @@ export function applyThemeMode(mode: ResolvedThemeMode): void {
 
 export function applyAppTheme(theme: GatekeeperAppTheme): void {
   applyThemeMode(theme.mode);
-  applyAccentColor(document.documentElement.style, theme.accentColor);
+  applyGatekeeperAppTheme(document.documentElement, theme, "paper");
 }

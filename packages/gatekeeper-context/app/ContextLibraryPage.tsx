@@ -516,7 +516,7 @@ function FieldLabel({
 
 // Shared styling for the `…` overflow menus (file rows, folder rows, the tree's Add button).
 const MENU_CONTENT =
-  "z-[1100]! min-w-[168px]! rounded-lg border border-kumo-line bg-kumo-base p-1 shadow-[0_10px_24px_rgba(20,17,16,0.10)]";
+  "z-[1100]! min-w-[168px]! rounded-lg border border-kumo-line bg-kumo-base p-1 shadow-lg";
 const MENU_ITEM =
   "h-auto! rounded-md px-2.5! py-1.5! text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-default data-highlighted:bg-kumo-tint";
 const MENU_ITEM_DANGER =
@@ -1019,7 +1019,7 @@ export default function ContextLibraryPage() {
             Context &amp; Skills
           </h1>
           <p className="mt-1 max-w-2xl text-[13px] leading-[18px] tracking-[-0.25px] text-kumo-subtle">
-            Collections of documents, skills, and other files your agents can use.
+            Organize documents, skills, and other files for your MilesVault assistant.
           </p>
         </div>
         {enabled.length > 0 && (
@@ -2544,7 +2544,7 @@ function CollectionEditor({
             <CaretLeft size={14} />
             Context &amp; Skills
           </button>
-          <div className="rounded-xl border border-kumo-line bg-kumo-base px-5 py-10 text-center shadow-[0_1px_2px_rgba(20,17,16,0.03)]">
+          <div className="rounded-xl border border-kumo-line bg-kumo-base px-5 py-10 text-center shadow-sm">
             <BookOpen size={32} className="mx-auto mb-3 text-kumo-subtle" />
             <p className="m-0 text-[15px] leading-5 font-medium tracking-[-0.25px] text-kumo-default">
               This collection is no longer available

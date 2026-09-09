@@ -194,6 +194,19 @@ after(async () => {
   await rm(checkboxFixtureDir, { recursive: true, force: true });
 });
 
+describe("generated configurator skin", () => {
+  it("bundles the paper skin and Inter without allowing font network access", async () => {
+    const html = await readFile(join(fixtureDir, "src", "generated", "test-ui.txt"), "utf8");
+    assert.ok(html.includes('<html data-skin="paper">'));
+    assert.ok(html.includes("--color-kumo-base: light-dark(#ffffff, #0b0b0b)"));
+    assert.ok(html.includes("data:font/woff2;base64,"));
+    assert.ok(html.includes("font-src data:;"));
+    assert.ok(html.includes("connect-src 'none';"));
+    assert.ok(html.includes("frame-src 'none';"));
+    assert.ok(!html.includes("url('./fonts/"));
+  });
+});
+
 describe("generated configurator error reporting", () => {
   it("maps executed configurator failures to the original TSX position", async () => {
     const runtime = await readRuntime(fixtureDir);

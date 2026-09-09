@@ -10,7 +10,7 @@
 // editor and the emoji picker — can react when the mode changes at runtime.
 
 import {
-  applyAccentColor,
+  applyGatekeeperAppTheme,
   type GatekeeperAppTheme,
 } from "@gadgets/workshop-shared/theme";
 
@@ -39,7 +39,7 @@ export function applyThemeMode(mode: ResolvedThemeMode): void {
 
 export function applyAppTheme(theme: GatekeeperAppTheme): void {
   applyThemeMode(theme.mode);
-  applyAccentColor(document.documentElement.style, theme.accentColor);
+  applyGatekeeperAppTheme(document.documentElement, theme, "paper");
 }
 
 /** Subscribe to mode changes. Returns an unsubscribe function. */
