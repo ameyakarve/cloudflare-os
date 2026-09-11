@@ -1,5 +1,6 @@
 import type { SpecialistRecord } from '@gadgets/workshop-shared/specialists';
 import { parseSpecialists, specialistData, specialistOperation, SpecialistDispatcher, type SpecialistTools } from './specialists';
+import type { DoctorHumanQueue } from "@gadgets/workshop-shared/deployment-doctor-controls";
 import type { DoctorReadSession } from "@gadgets/workshop-shared/deployment-doctor";
 import type { DeploymentLedgerApplication, LedgerEditorSession, LedgerHoldingsSession, LedgerApplicationQueue, VaultReadSession } from "@gadgets/workshop-shared/deployment-ledger";
 import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, isDeploymentUsageError, UsageScope } from "./deployment-usage.js";
@@ -239,6 +240,22 @@ class LedgerApplicationQueueAdapter extends NativeRpcTarget implements LedgerApp
     return (this.#queue as NativeRpcStub<ApprovalQueue & Required<Pick<ApprovalQueue, "getUsageBudget">>>).getUsageBudget();
   }
   [Symbol.dispose]() { this.#queue[Symbol.dispose](); }
+}
+
+/** First-party-only adapter. An observation authorizes a read, never a human metadata decision. */
+@validateRpc()
+class PrivateHumanQueueAdapter extends LedgerApplicationQueueAdapter implements DoctorHumanQueue {
+  constructor(queue: NativeRpcStub<ApprovalQueue>, private check: () => Promise<void>) { super(queue); }
+  async checkActive() { await this.check(); }
+  override async authorizeObservation(description: ObservationDescription) {
+    await this.check(); await super.authorizeObservation(description); await this.check();
+  }
+  override async getUsageBudget(): Promise<DeploymentUsageRun | undefined> {
+    await this.check();
+    const run = await super.getUsageBudget();
+    try { await this.check(); return run; }
+    catch (error) { if (run) await run.finish(); throw error; }
+  }
 }
 
 /** Stable persisted facet name; the deployment service owns editor behavior and authority. */
@@ -1729,7 +1746,12 @@ class OverseerImpl implements AgentHooks {
   readonly streamGeneration = Date.now();
 
   // If not set, this gadget doesn't exist yet.
-  ownerId?: string;
+  #ownerId?: string;
+  get ownerId(): string | undefined { return this.#ownerId; }
+  set ownerId(value: string | undefined) {
+    if (value !== this.#ownerId) this.privateUiEpoch++;
+    this.#ownerId = value;
+  }
 
   // Cached from storage, initialized during the constructor, since it is referenced often but
   // almost never changes.
@@ -5402,8 +5424,25 @@ class OverseerImpl implements AgentHooks {
    * Durable Object as before. The managed Ledger receives a platform-owned UI session instead,
    * so its explicit human Save path never has to be exposed as an agent-callable Gadget method.
    */
-  async getGadgetUiSession(gadgetId: WorkpieceId, chatId?: number, joinedAs?: SessionKind): Promise<RpcStub<any>> {
+  async getGadgetUiSession(gadgetId: WorkpieceId, chatId?: number, joinedAs?: SessionKind, clientUserId?: string): Promise<RpcStub<any>> {
     let gadget = this.getGadgetRecord(gadgetId);
+    const resource = this.getPrivateControlResource(gadgetId, clientUserId);
+    if (resource) {
+      const app = this.env.MILESVAULT_DOCTOR_APP;
+      if (!app) throw new Error("Private application controls unavailable; use the read-only resource.");
+      const epoch = this.privateUiEpoch;
+      const key = resource.systemResource!.identityKey;
+      // Deliberately omit chatId: this caller owns a user-operation root, never an agent lease.
+      using queue = new NativeRpcStub(new ApprovalQueueImpl(this, resource.id, {from: "user"}));
+      using scope = new NativeRpcStub(new PrivateHumanQueueAdapter(queue, async () => {
+        const current = this.getPrivateControlResource(gadgetId, clientUserId);
+        if (this.privateUiEpoch !== epoch || current?.id !== resource.id || current?.systemResource?.identityKey !== key) {
+          throw new Error("Private application identity or Stop epoch changed. Reopen the UI.");
+        }
+      }));
+      // Native Workers stubs are forwarded by Cap'n Web, as with the managed editor below.
+      return await app.openDoctorControls(key, scope) as unknown as RpcStub<any>;
+    }
     if (gadget.systemOutput !== "ledger") return this.getGadgetFacet(gadgetId, chatId, joinedAs);
 
     let edge = gadget.bindings.LEDGER;
@@ -5437,6 +5476,26 @@ class OverseerImpl implements AgentHooks {
     }
     let commitId = this.getGadgetHead(gadgetId);
     return commitId !== undefined ? await this.gitStore.readCommitFiles(commitId) : new Map();
+  }
+
+  /** Live host fence: retained first-party capabilities cannot survive Stop or binding changes. */
+  privateUiEpoch = 0;
+
+  /** Internal only: source/export/agent paths never use the human factory. */
+  getPrivateControlResource(gadgetId: WorkpieceId, clientUserId?: string): GatekeeperRecord | undefined {
+    const gadget = this.getGadgetRecord(gadgetId);
+    const edge = gadget.bindings.DOCTOR;
+    const resource = edge && this.storage.gatekeepers.get(edge.target);
+    if (!gadget.privateReadOutput || resource?.systemResource?.type !== "doctorRead") return undefined;
+    if (!clientUserId || clientUserId !== this.ownerId) throw new Error("Private application controls require the authenticated owner.");
+    return resource;
+  }
+
+  /** Browser-only bundle lookup; saved Gadget files and history are never rewritten. */
+  async getPrivateControlUi(gadgetId: WorkpieceId, clientUserId: string): Promise<UiBundle | undefined> {
+    if (!this.getPrivateControlResource(gadgetId, clientUserId)) return undefined;
+    if (!this.env.MILESVAULT_DOCTOR_APP) throw new Error("Private application controls unavailable.");
+    return this.env.MILESVAULT_DOCTOR_APP.getDoctorControlUi();
   }
 
   async getGadgetUiBundle(gadgetId: WorkpieceId, chatId?: number): Promise<UiBundle | null> {
@@ -7183,6 +7242,7 @@ class OverseerImpl implements AgentHooks {
 
   /** Stop the execution current at entry; ACK means durable intent, not external-work recall. */
   async cancelAgent(chatId: number): Promise<void> {
+    this.privateUiEpoch++;
     // A live specialist shares its coordinator's controller and allowance. Stop that captured
     // execution durably, never a newer coordinator that happens to reuse the same chat.
     const childRoot = this.#specialistChildren.get(chatId)?.root;
@@ -10747,6 +10807,8 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     let record = edge && this.impl.storage.gatekeepers.get(edge.target);
     if (gadget.privateReadOutput && record?.systemResource?.type === "doctorRead" &&
         record.systemResource.identityKey === ledgerKey && this.impl.storage.prohibitAllSharing.get()) return;
+    // A changed identity cannot regain an older approval by later changing back (ABA).
+    this.impl.privateUiEpoch++;
     const makeClass = (): GatekeeperClass => this.impl.ctx.exports.DoctorReadGatekeeper({props: {ledgerKey}});
     if (!record || record.systemResource?.type !== "doctorRead") {
       const id = this.impl.allocateWorkpieceId();
@@ -13584,7 +13646,7 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
   }
 
   async getUiBundle(chatId?: number): Promise<UiBundle | null> {
-    const bundle = await this.impl.getGadgetUiBundle(this.id, chatId);
+    const bundle = await this.impl.getPrivateControlUi(this.id, this.clientUserId) ?? await this.impl.getGadgetUiBundle(this.id, chatId);
     // Negotiation reports compatibility only; it cannot add any RPC authority.
     if (bundle) bundle.managedDraft = this.impl.getManagedDraftDescriptor(this.id, this.clientUserId);
     return bundle;
@@ -13597,7 +13659,7 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
       chat_id: chatId,
       interaction_type: "gadget_ui_connected",
     });
-    return this.impl.getGadgetUiSession(this.id, chatId, this.joinedAs);
+    return this.impl.getGadgetUiSession(this.id, chatId, this.joinedAs, this.clientUserId);
   }
 
   async getExportFormats(chatId?: number): Promise<GadgetExportFormat[]> {

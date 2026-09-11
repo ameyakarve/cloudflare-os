@@ -52,6 +52,10 @@
       "types": "./src/specialists.ts",
       "import": "./src/specialists.ts"
     },
+    "./deployment-doctor-controls": {
+      "types": "./src/deployment-doctor-controls.ts",
+      "import": "./src/deployment-doctor-controls.ts"
+    },
     "./deployment-doctor": {
       "types": "./src/deployment-doctor.ts",
       "import": "./src/deployment-doctor.ts"
