@@ -14,6 +14,7 @@ import FrontendErrorBoundary from './FrontendErrorBoundary'
 import { installWorkshopErrorReporting, reportIssue } from './errorReporting'
 import { applySiteFavicon, cacheBustSiteLogoUrl } from './siteLogoUtils'
 import { appPath } from './appPath'
+import { DraftProvider } from './features/managed-drafts/DraftContext'
 
 // ---------------------------------------------------------------------------
 // Dev auto-login: if VITE_DEV_AUTO_LOGIN=true, automatically create/login
@@ -263,7 +264,7 @@ function AppWithConnection() {
             <div className="app-viewport flex min-w-0 flex-col overflow-hidden">
               <AnnouncementBanner />
               <div className="h-full min-h-0 flex-1">
-                <RouterProvider router={router} />
+                <DraftProvider><RouterProvider router={router} /></DraftProvider>
               </div>
             </div>
           </ServerConfigContext.Provider>

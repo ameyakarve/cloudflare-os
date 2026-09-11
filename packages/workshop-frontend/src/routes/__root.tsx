@@ -1,6 +1,8 @@
 import { logRpcFailure } from '../rpcErrors'
 import { useState, useEffect } from 'react'
 import { createRootRoute, Outlet, useRouterState } from '@tanstack/react-router'
+import { useDraftNavigationGuard } from '../features/managed-drafts/useDraftNavigationGuard'
+import { useDraftCoordinator } from '../features/managed-drafts/DraftContext'
 import { TooltipProvider, Toasty } from '@cloudflare/kumo'
 import { RpcStub } from 'capnweb'
 import { AuthenticatedApi } from '@gadgets/workshop-shared/api'
@@ -21,7 +23,9 @@ export const Route = createRootRoute({
 function RootComponent() {
   const rpcStub = useRpcStub()
   const connectionLost = useConnectionLost()
-  const { isAuthenticated, authenticatedApi, isLoading, error, logout, login } = useAuth(rpcStub)
+  const drafts = useDraftCoordinator()
+  const { isAuthenticated, authenticatedApi, isLoading, error, logout, login, sessionGeneration } = useAuth(rpcStub, drafts)
+  useDraftNavigationGuard()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
 
   // Routes that don't require auth (public routes)
@@ -65,6 +69,7 @@ function RootComponent() {
         >
           Retry
         </button>
+        <button onClick={logout} className="text-sm underline">Sign out / change account</button>
       </div>
     )
   }
@@ -106,7 +111,7 @@ function RootComponent() {
   // !isAuthenticated branches all return early above.
   if (!authenticatedApi) return null
   return (
-    <AuthProvider authenticatedApi={authenticatedApi} onLogout={logout}>
+    <AuthProvider key={sessionGeneration} authenticatedApi={authenticatedApi} onLogout={logout}>
       <FeatureFlagsProvider>
         <TooltipProvider>
           <Toasty>

@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
-import { Text, Loader, Banner } from '@cloudflare/kumo'
+import { Text, Loader, Banner, Button } from '@cloudflare/kumo'
 import { Sparkle } from '@phosphor-icons/react'
 import { RpcStub, RpcTarget, newMessagePortRpcSession } from 'capnweb'
 import { GadgetClient, ConsoleLogEvent } from '@gadgets/workshop-shared/api'
 import { useTheme } from './ThemeContext'
 import type { ResolvedThemeMode } from './theme'
+import type { ManagedDraftDescriptor } from '@gadgets/workshop-shared/api'
+import { useDraftCoordinator } from './features/managed-drafts/DraftContext'
+import { DraftFrameSession } from './features/managed-drafts/frameSession'
 
 // We want to inject Cap'n Web into the Gadget. Luckily it has no dependencies, so we can just take
 // the whole module and embed it. We can import the module using ?raw to get a string of the
@@ -150,10 +153,29 @@ const RECONNECT_TIMEOUT_MS = 5_000
 
 export default function GadgetUI(props: GadgetUIProps) {
   const { resolvedThemeMode } = useTheme()
-  return <GadgetUISession key={props.chatId} {...props} resolvedThemeMode={resolvedThemeMode} />
+  const drafts = useDraftCoordinator()
+  const [selection, setSelection] = useState({ chatId: props.chatId, gadget: props.gadget })
+  useEffect(() => {
+    if (selection.chatId === props.chatId) return
+    let cancelled = false
+    void (async () => {
+      if (drafts && !await drafts.guard(message => window.confirm(message))) return
+      if (!cancelled) setSelection({ chatId: props.chatId, gadget: props.gadget })
+    })()
+    return () => { cancelled = true }
+  }, [props.chatId, props.gadget, selection.chatId, drafts])
+  const gadget = selection.chatId === props.chatId ? props.gadget : selection.gadget
+  return <GadgetUISession key={selection.chatId} {...props} chatId={selection.chatId} gadget={gadget} resolvedThemeMode={resolvedThemeMode} />
 }
 
 function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isVisible = true, chatId, onConsoleLog, onIframeEscape, resolvedThemeMode }: GadgetUIProps & { resolvedThemeMode: ResolvedThemeMode }) {
+  const drafts = useDraftCoordinator()
+  const descriptorRef = useRef<ManagedDraftDescriptor | null>(null)
+  const draftSessionRef = useRef<DraftFrameSession | null>(null)
+  const [recovery, setRecovery] = useState<string | null>(null)
+  const [draftWarning, setDraftWarning] = useState('')
+  const [managed, setManaged] = useState(false)
+  const [draftSupported, setDraftSupported] = useState(false)
   const [sandboxedHtml, setSandboxedHtml] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -220,8 +242,14 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
   }
 
   const reloadIframe = (reason: unknown) => {
-    resetConnection(reason)
-    setIframeGeneration(generation => generation + 1)
+    void (async () => {
+      if (descriptorRef.current && drafts && !await drafts.guard(message => window.confirm(message))) return
+      draftSessionRef.current?.dispose()
+      draftSessionRef.current = null
+      resetConnection(reason)
+      if (descriptorRef.current) setIsInvalidated(true)
+      setIframeGeneration(generation => generation + 1)
+    })()
   }
 
   useEffect(() => {
@@ -229,6 +257,13 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
       if (handshakePendingRef.current !== null) {
         reloadIframe(new Error('Gadget changed during RPC handshake.'))
       }
+      return
+    }
+
+    // A managed editor does not redirect an existing document onto replacement Save authority.
+    // Re-read its trusted descriptor and negotiate a new document after flushing/confirmation.
+    if (descriptorRef.current && drafts) {
+      reloadIframe(new Error('Managed editor connection changed.'))
       return
     }
 
@@ -268,16 +303,16 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
   useEffect(() => {
     // Only react if reloadTrigger has actually changed from the previous value
     if (reloadTrigger !== undefined && reloadTrigger !== prevReloadTriggerRef.current && reloadTrigger > 0) {
-      // Mark as invalidated but don't reload unless visible
-      setIsInvalidated(true)
-      if (!isVisible) {
-        // If not visible, just clear the current state
-        setSandboxedHtml(null)
-        setHasLoaded(false)
-        setError(null)
-      }
-      // Update the ref to the current value
       prevReloadTriggerRef.current = reloadTrigger
+      let cancelled = false
+      void (async () => {
+        if (descriptorRef.current && drafts && !await drafts.guard(message => window.confirm(message))) return
+        if (cancelled) return
+        draftSessionRef.current?.dispose()
+        draftSessionRef.current = null
+        setIsInvalidated(true)
+      })()
+      return () => { cancelled = true }
     }
   }, [reloadTrigger, isVisible])
 
@@ -314,6 +349,8 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
         const bundle = await gadget.getUiBundle(chatId)
         if (!isCurrent()) return
         if (bundle) {
+          descriptorRef.current = bundle.managedDraft ?? null
+          setManaged(!!bundle.managedDraft)
           const html = createSandboxedHtml(bundle.jsCode, resolvedThemeModeRef.current)
           setSandboxedHtml(html)
         } else {
@@ -375,6 +412,18 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
       if (event.data === 'handshake' && event.ports && event.ports[0]) {
         const port = event.ports[0]
         let gadgetStub: any = null
+        draftSessionRef.current?.dispose()
+        draftSessionRef.current = null
+        const descriptor = descriptorRef.current
+        if (descriptor && drafts) {
+          if (!drafts.lease(descriptor)()) { port.close(); return }
+          setDraftSupported(false)
+          draftSessionRef.current = new DraftFrameSession(drafts, descriptor, (candidate, warning, supported) => {
+            setRecovery(candidate); setDraftWarning(warning); setDraftSupported(supported)
+          })
+          draftSessionRef.current.connect(event.source as Window, ++connectionGenerationRef.current)
+        }
+        const authorized = descriptor && drafts ? drafts.lease(descriptor) : () => true
         resetConnection(new Error('Gadget iframe reloaded.'))
         const generation = connectionGenerationRef.current
         handshakePendingRef.current = generation
@@ -384,7 +433,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
         try {
           // Open the RPC connection to the gadget's server side
           gadgetStub = await gadgetRef.current.connectToGadget(chatId)
-          if (!isCurrent()) {
+          if (!isCurrent() || !authorized()) {
             gadgetStub[Symbol.dispose]?.()
             port.close()
             return
@@ -396,10 +445,15 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
               if (typeof property === 'symbol' || property in target) {
                 return Reflect.get(target, property, receiver)
               }
-              const pending = pendingGadgetStubRef.current
-              return pending
-                ? (...args: any[]) => pending.promise.then(stub => stub[property](...args))
-                : gadgetStubRef.current[property]
+              return (...args: any[]) => {
+                if (cancelled || (descriptor && (!isCurrent() || !authorized()))) throw new Error('Session expired. Reauthenticate before using this editor.')
+                const pending = pendingGadgetStubRef.current
+                // Managed writes must never queue across an auth epoch and execute on reconnect.
+                if (descriptor && pending) throw new Error('Editor disconnected. Reauthenticate before saving.')
+                return pending
+                  ? pending.promise.then(stub => stub[property](...args))
+                  : gadgetStubRef.current[property](...args)
+              }
             },
           })
           rpcSessionRef.current = newMessagePortRpcSession(port, forwardingTarget)
@@ -427,6 +481,8 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
     return () => {
       cancelled = true
       window.removeEventListener('message', handleMessage)
+      draftSessionRef.current?.dispose()
+      draftSessionRef.current = null
       resetConnection(new Error('Gadget RPC session was closed.'))
     }
   }, [])
@@ -524,9 +580,17 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
   }
 
   return (
-    <div style={{ height, width: '100%' }}>
+    <div style={{ height, width: '100%' }} className="flex flex-col">
+      {managed && <div className="p-2 text-sm bg-kumo-base text-kumo-default" role="status">
+        {recovery ? <><span>A private draft is available. Restore keeps its original concurrency references; nothing is saved automatically. </span>
+          <Button size="sm" variant="secondary" onClick={() => draftSessionRef.current?.choose(true)}>Restore</Button>{' '}
+          <Button size="sm" variant="secondary" onClick={() => draftSessionRef.current?.choose(false)}>Discard</Button></> :
+          <span>{draftSupported ? 'Private draft recovery enabled for this tab. Nothing is saved automatically. ' :
+            'Recovery requires a compatible client. Otherwise copy unsaved text before leaving; dirty state is not tracked. '}</span>}
+        {draftWarning && <span role="alert">{draftWarning}</span>}
+      </div>}
       <iframe
-        key={`${reloadTrigger}:${iframeGeneration}`}
+        key={iframeGeneration}
         ref={iframeRef}
         srcDoc={sandboxedHtml}
         style={{
