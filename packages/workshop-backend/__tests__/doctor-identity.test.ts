@@ -27,7 +27,9 @@ it('mints the human guard only through the owner browser route and revokes it on
     try {
       await expect(impl.getGadgetUiSession(3, undefined, undefined, 'other')).rejects.toThrow('authenticated owner');
       expect(retained).toBeUndefined();
-      expect(await impl.getPrivateControlUi(3, owner)).toEqual({jsCode:'immutable fixture, not saved source'});
+      const bundle = await impl.getPrivateControlUi(3, owner);
+      expect(bundle?.jsCode.endsWith('immutable fixture, not saved source')).toBe(true);
+      expect(bundle?.jsCode).not.toBe('immutable fixture, not saved source'); // Includes the standard React/GadgetUI runtime.
       using session = await impl.getGadgetUiSession(3, undefined, undefined, owner);
       await retained!.checkActive();
       await instance.configureDoctorReadOutput(owner, 'member@example.com');

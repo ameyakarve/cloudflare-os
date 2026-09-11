@@ -5495,7 +5495,9 @@ class OverseerImpl implements AgentHooks {
   async getPrivateControlUi(gadgetId: WorkpieceId, clientUserId: string): Promise<UiBundle | undefined> {
     if (!this.getPrivateControlResource(gadgetId, clientUserId)) return undefined;
     if (!this.env.MILESVAULT_DOCTOR_APP) throw new Error("Private application controls unavailable.");
-    return this.env.MILESVAULT_DOCTOR_APP.getDoctorControlUi();
+    const bundle = await this.env.MILESVAULT_DOCTOR_APP.getDoctorControlUi();
+    // The standard runtime supplies React/GadgetUI and host theme handling, not just Kumo CSS.
+    return {jsCode: withGadgetKumo(bundle.jsCode)};
   }
 
   async getGadgetUiBundle(gadgetId: WorkpieceId, chatId?: number): Promise<UiBundle | null> {
