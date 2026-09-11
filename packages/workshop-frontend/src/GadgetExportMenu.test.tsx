@@ -75,6 +75,7 @@ let container: HTMLDivElement
 let root: Root
 
 beforeEach(() => {
+  vi.stubEnv('VITE_MANAGED_LEDGER_EXPORT_PATH', '')
   mocks.saveStreamToFile.mockReset()
   mocks.toast.mockReset()
   container = document.createElement('div')
@@ -85,6 +86,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
+  vi.unstubAllEnvs()
 })
 
 function gadget(overrides: Partial<GadgetClient>): RpcStub<GadgetClient> {
@@ -97,7 +99,8 @@ function button(label: string): HTMLButtonElement | undefined {
 }
 
 describe('GadgetExportMenu', () => {
-  it('replaces generic managed exports with a canonical user-click download', async () => {
+  it('replaces generic managed exports with a deployment-owned user-click download', async () => {
+    vi.stubEnv('VITE_MANAGED_LEDGER_EXPORT_PATH', '/deployment/saved-journal')
     const getExportFormats = vi.fn()
     const exportFormat = vi.fn()
     const client = gadget({ getExportFormats, export: exportFormat })
@@ -106,15 +109,36 @@ describe('GadgetExportMenu', () => {
     })
     expect(container.querySelector('button')).toBeNull()
     const link = container.querySelector('a')!
-    expect(link.getAttribute('href')).toBe('/api/os/ledger/export')
+    expect(link.getAttribute('href')).toBe('/deployment/saved-journal')
     expect(link.target).toBe('_blank')
     expect(link.rel).toContain('noopener')
+    expect(link.rel).toContain('noreferrer')
+    expect(getExportFormats).not.toHaveBeenCalled()
+    expect(exportFormat).not.toHaveBeenCalled()
+    expect(mocks.saveStreamToFile).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    undefined, '', 'https://foreign.example/export', '//foreign.example/export',
+    'javascript:alert(1)', 'data:text/plain,export', 'relative/export', '/\\\\foreign/export',
+    '/api/../export', '/api/./export', '/api/%2f/export', '/api//export',
+    '/export?user=other', '/export#fragment', '/export\n', ' /export',
+  ])('hides managed download without a safe configured path: %s', async path => {
+    vi.stubEnv('VITE_MANAGED_LEDGER_EXPORT_PATH', path)
+    const getExportFormats = vi.fn()
+    const exportFormat = vi.fn()
+    await act(async () => {
+      root.render(<GadgetExportMenu gadget={gadget({ getExportFormats, export: exportFormat })}
+        gadgetTitle="Saved journal" systemOutput="ledger" />)
+    })
+    expect(container.textContent).toBe('')
     expect(getExportFormats).not.toHaveBeenCalled()
     expect(exportFormat).not.toHaveBeenCalled()
     expect(mocks.saveStreamToFile).not.toHaveBeenCalled()
   })
 
   it('loads formats on open and exports the selected one with its metadata', async () => {
+    vi.stubEnv('VITE_MANAGED_LEDGER_EXPORT_PATH', '/deployment/saved-journal')
     const exportFormat = vi.fn<(
       id: string,
       chatId?: number,

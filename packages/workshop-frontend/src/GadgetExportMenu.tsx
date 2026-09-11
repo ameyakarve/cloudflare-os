@@ -17,7 +17,12 @@ type Props = {
 
 export default function GadgetExportMenu(props: Props) {
   if (props.systemOutput === 'ledger') {
-    return <a href="/api/os/ledger/export" target="_blank" rel="noopener noreferrer"
+    // Deployment-owned, origin-root path (not relative to the Workshop mount). Never
+    // accept URLs, encoded separators, dot segments, or authored Gadget input here.
+    const path = import.meta.env.VITE_MANAGED_LEDGER_EXPORT_PATH
+    if (typeof path !== 'string' || path !== path.trim() ||
+        !/^\/[a-z0-9_-]+(?:\/[a-z0-9_-]+)*$/i.test(path)) return null
+    return <a href={path} target="_blank" rel="noopener noreferrer"
       className="text-sm text-kumo-default hover:underline">Download saved journal</a>
   }
   return <GenericGadgetExportMenu {...props} />
