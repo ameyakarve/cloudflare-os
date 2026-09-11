@@ -78,6 +78,30 @@ it('short configured expiry and exact acquisition boundary fail closed', async (
   });
 });
 
+it.each(['0', '9223372036854775806'])('closing advanced fence preserves unacknowledged cleanup from generation %s', async generation => {
+  await runInDurableObject(stub(), async (_, ctx) => {
+    const j = new UsageAcquisitionJournal(ctx.storage), now = Date.now();
+    ctx.storage.sql.exec('UPDATE usage_caller_slots_v2 SET generation = CAST(? AS INTEGER) WHERE slot = 0', generation);
+    const original = {slot: 0, generation};
+    expect(j.claim(original, intent(now), now)).toBe(true);
+    expect(j.attach(original, target, now)).toBe(true);
+    expect(j.close(original, now)).toBe(true);
+    const before = ctx.storage.sql.exec('SELECT * FROM usage_caller_slots_v2').toArray();
+    const advanced = {slot: 0, generation: String(BigInt(generation) + 1n)};
+    expect(j.close(advanced, now + 1)).toBe(false);
+    expect(ctx.storage.sql.exec('SELECT * FROM usage_caller_slots_v2').toArray()).toEqual(before);
+    const reopened = new UsageAcquisitionJournal(ctx.storage);
+    expect(reopened.read(original)?.remote).toEqual(target);
+    expect(reopened.available().some(candidate => candidate.slot === 0)).toBe(false);
+    await reopened.drain(async remote => { expect(remote).toEqual(target); return false; }, now);
+    expect(reopened.read(original)?.state).toBe('cleaning');
+    expect(reopened.close(advanced, now + 2)).toBe(false);
+    expect(reopened.read(original)?.remote).toEqual(target);
+    await reopened.drain(async remote => { expect(remote).toEqual(target); return true; }, now + 100000);
+    expect(reopened.records()).toHaveLength(0);
+  });
+});
+
 it('all slots can be cleaning; failures retain original routing without capacity or roles', async () => {
   await runInDurableObject(stub(), async (_, ctx) => {
     const j = new UsageAcquisitionJournal(ctx.storage), now = Date.now();

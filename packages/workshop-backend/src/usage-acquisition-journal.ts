@@ -183,7 +183,12 @@ export class UsageAcquisitionJournal {
     return this.storage.transactionSync(() => {
       const row = this.rows()[id.slot];
       const r = this.read(id);
-      if (r?.state === 'cleaning') return true;
+      // The row fence may already be ahead of the retained cleanup record.
+      // Never treat that advanced fence as an empty slot: only acknowledged
+      // cleanup may remove the original routing/ticket obligation.
+      if (row.state === 'cleaning') {
+        return r?.state === 'cleaning' || BigInt(row.generation) > BigInt(id.generation);
+      }
       if (BigInt(row.generation) > BigInt(id.generation) || row.state === 'sealed') return true;
       if (row.generation !== id.generation) return false;
       if (r?.remote) {
