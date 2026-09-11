@@ -24,10 +24,18 @@ export interface DoctorControlSession extends DoctorReadSession {
   /** Revoke pending review and work; work drains before its owning caller finishes the root. */
   stop(): Promise<void>;
 }
+/** SHA-256 of the exact deployment UI source, before the standard host runtime is prepended. */
+export async function doctorControlUiHash(jsCode: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(jsCode));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 /** Private factory extension, intentionally separate from the immutable READ resource. */
 export interface DoctorControlFactory {
   /** Owner identity is supplied by authenticated kernel ingress, never by browser code. */
   openDoctorControls(key: string, queue: RpcStub<DoctorHumanQueue>): Promise<DoctorControlSession>;
+  /** Versioned factory: reject unless the session implementation supports these exact UI bytes. */
+  openDoctorControlsV1(key: string, queue: RpcStub<DoctorHumanQueue>, uiSha256: string): Promise<DoctorControlSession>;
   /** Deployment-owned immutable UI bytes, never loaded from a saved Gadget source/history. */
   getDoctorControlUi(): Promise<{jsCode: string}>;
 }

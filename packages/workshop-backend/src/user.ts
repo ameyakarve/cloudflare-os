@@ -1,4 +1,4 @@
-import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, DeploymentUsageRunImpl } from "./deployment-usage.js";
+import { boundedUsageAcquisition, deploymentUsageEnabled, DeploymentUsageError, DeploymentUsageRunImpl } from "./deployment-usage.js";
 import { readDeploymentAccess } from "./deployment-access.js";
 import type { DeploymentAccessGrant } from "@gadgets/workshop-shared/deployment-access";
 import { RpcStub } from "capnweb";
@@ -386,9 +386,11 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     const key = this.storage.deploymentIdentity.get()?.storageKey;
     const policy = this.env.DEPLOYMENT_USAGE_POLICY;
     if (!key || !policy) throw new DeploymentUsageError();
-    const result = await boundedUsage((async () => existingRunId
+    const result = await boundedUsageAcquisition((async () => existingRunId
       ? await policy.getRunGrant(key, existingRunId)
-      : await policy.beginRun(key, crypto.randomUUID()))());
+      : await policy.beginRun(key, crypto.randomUUID()))(), async late => {
+        if (late?.allowed === true) await policy.finishRun(key, late.runId);
+      }, drain => this.ctx.waitUntil(drain));
     if (result?.allowed !== true) throw new DeploymentUsageError(result?.allowed === false ? result.reason : undefined);
     return new DeploymentUsageRunImpl(policy, key, result, () => this.getDeploymentAccessGrant());
   }

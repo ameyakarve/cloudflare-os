@@ -37,6 +37,29 @@ export async function boundedUsage<T>(operation: PromiseLike<T>): Promise<T> {
   } finally { clearTimeout(timer); }
 }
 
+/** Retain timed-out acquisition replies through native request completion and close late grants.
+ * This is transient ownership only: lost RPC replies still require a durable policy cancellation protocol.
+ */
+export async function boundedUsageAcquisition<T>(operation: PromiseLike<T>, finishLate: (value: T) => Promise<void>,
+    waitUntil: (drain: Promise<void>) => void): Promise<T> {
+  let abandoned = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const owned = Promise.resolve(operation).then(async value => {
+    if (abandoned) {
+      await finishLate(value);
+      throw new DeploymentUsageError();
+    }
+    return value;
+  });
+  // Native DO lifetime retention, not a detached late callback. Rejections are also collected.
+  waitUntil(owned.then(() => {}, () => {}));
+  try {
+    return await Promise.race([owned, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => { abandoned = true; reject(new DeploymentUsageError()); }, 5_000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 /** User-DO-owned capability with no arbitrary account selector. */
 export class DeploymentUsageRunImpl extends RpcTarget implements DeploymentUsageRun {
   #finished = false;
@@ -111,7 +134,11 @@ export class UsageScope implements AsyncDisposable {
         throw new DeploymentUsageError('expired_run');
       }
       return new UsageScope(run, grant);
-    } catch (error) { run[Symbol.dispose](); throw error; }
+    } catch (error) {
+      // Acquisition succeeded; validation failure does not relinquish ownership of the root.
+      try { await run.finish(); } finally { run[Symbol.dispose](); }
+      throw error;
+    }
   }
   borrow(): DeploymentUsageRun { return new BorrowedUsageRun(this.run.dup()); }
   async reserve(usage: DeploymentUsage): Promise<string> {

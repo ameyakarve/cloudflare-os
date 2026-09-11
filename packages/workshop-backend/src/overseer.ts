@@ -1,9 +1,9 @@
 import type { SpecialistRecord } from '@gadgets/workshop-shared/specialists';
 import { parseSpecialists, specialistData, specialistOperation, SpecialistDispatcher, type SpecialistTools } from './specialists';
-import type { DoctorHumanQueue } from "@gadgets/workshop-shared/deployment-doctor-controls";
+import { doctorControlUiHash, type DoctorHumanQueue } from "@gadgets/workshop-shared/deployment-doctor-controls";
 import type { DoctorReadSession } from "@gadgets/workshop-shared/deployment-doctor";
 import type { DeploymentLedgerApplication, LedgerEditorSession, LedgerHoldingsSession, LedgerApplicationQueue, VaultReadSession } from "@gadgets/workshop-shared/deployment-ledger";
-import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, isDeploymentUsageError, UsageScope } from "./deployment-usage.js";
+import { boundedUsageAcquisition, deploymentUsageEnabled, DeploymentUsageError, isDeploymentUsageError, UsageScope } from "./deployment-usage.js";
 import type { DeploymentUsage, DeploymentUsageRun, UsageGrant } from "@gadgets/workshop-shared/deployment-usage";
 import { deploymentIdentity } from "./deployment-identity.js";
 import { deploymentAccessEnabled, DeploymentAccessError, watchDeploymentAccess } from "./deployment-access.js";
@@ -512,6 +512,8 @@ export type GadgetRecord = {
   systemOutput?: "ledger";
   /** Immutable deployment-owned read UI; never exported, shared or given editor authority. */
   privateReadOutput?: boolean;
+  /** Explicit trusted installation consent; never inferred from archived READ markers or blueprint metadata. */
+  doctorControls?: { version: 1; uiSha256: string; ownerId: string };
 
   /**
    * Name of the gadget to use in the workspace's default binding list for new chats. That is, when
@@ -1955,7 +1957,9 @@ class OverseerImpl implements AgentHooks {
     if (existing && existing.expiresAt <= Date.now()) throw new DeploymentUsageError('expired_run');
     await this.checkDeploymentAccess();
     if (!this.ownerId) throw new DeploymentUsageError();
-    const run = await boundedUsage(this.users.get(this.users.idFromString(this.ownerId)).beginDeploymentUsageRun(existing?.runId));
+    const run = await boundedUsageAcquisition(this.users.get(this.users.idFromString(this.ownerId)).beginDeploymentUsageRun(existing?.runId),
+        async late => { if (late) { try { await late.finish(); } finally { late[Symbol.dispose](); } } },
+        drain => this.ctx.waitUntil(drain));
     if (!run) throw new DeploymentUsageError();
     return UsageScope.open(run, existing);
   }
@@ -1969,7 +1973,9 @@ class OverseerImpl implements AgentHooks {
     if (caller.from === "agent") throw new DeploymentUsageError("expired_run");
     await this.checkDeploymentAccess();
     if (!this.ownerId) throw new DeploymentUsageError();
-    const run = await boundedUsage(this.users.get(this.users.idFromString(this.ownerId)).beginDeploymentUsageRun());
+    const run = await boundedUsageAcquisition(this.users.get(this.users.idFromString(this.ownerId)).beginDeploymentUsageRun(),
+        async late => { if (late) { try { await late.finish(); } finally { late[Symbol.dispose](); } } },
+        drain => this.ctx.waitUntil(drain));
     if (!run) throw new DeploymentUsageError();
     return run;
   }
@@ -5431,17 +5437,21 @@ class OverseerImpl implements AgentHooks {
       const app = this.env.MILESVAULT_DOCTOR_APP;
       if (!app) throw new Error("Private application controls unavailable; use the read-only resource.");
       const epoch = this.privateUiEpoch;
+      const release = gadget.doctorControls!;
       const key = resource.systemResource!.identityKey;
       // Deliberately omit chatId: this caller owns a user-operation root, never an agent lease.
       using queue = new NativeRpcStub(new ApprovalQueueImpl(this, resource.id, {from: "user"}));
       using scope = new NativeRpcStub(new PrivateHumanQueueAdapter(queue, async () => {
         const current = this.getPrivateControlResource(gadgetId, clientUserId);
-        if (this.privateUiEpoch !== epoch || current?.id !== resource.id || current?.systemResource?.identityKey !== key) {
+        const currentRelease = this.getGadgetRecord(gadgetId).doctorControls;
+        if (this.privateUiEpoch !== epoch || current?.id !== resource.id || current?.systemResource?.identityKey !== key ||
+            currentRelease?.uiSha256 !== release.uiSha256 || currentRelease?.version !== release.version) {
           throw new Error("Private application identity or Stop epoch changed. Reopen the UI.");
         }
       }));
       // Native Workers stubs are forwarded by Cap'n Web, as with the managed editor below.
-      return await app.openDoctorControls(key, scope) as unknown as RpcStub<any>;
+      // A distinct method fails closed on older services that would ignore an extra version argument.
+      return await app.openDoctorControlsV1(key, scope, release.uiSha256) as unknown as RpcStub<any>;
     }
     if (gadget.systemOutput !== "ledger") return this.getGadgetFacet(gadgetId, chatId, joinedAs);
 
@@ -5484,9 +5494,14 @@ class OverseerImpl implements AgentHooks {
   /** Internal only: source/export/agent paths never use the human factory. */
   getPrivateControlResource(gadgetId: WorkpieceId, clientUserId?: string): GatekeeperRecord | undefined {
     const gadget = this.getGadgetRecord(gadgetId);
+    const release = gadget.doctorControls;
+    if (!release) return undefined; // Existing immutable READ installations keep their saved bundle AND session.
+    if (release.version !== 1 || !/^[a-f0-9]{64}$/.test(release.uiSha256) || release.ownerId !== this.ownerId) {
+      throw new Error("Pinned Doctor controls release is unavailable.");
+    }
     const edge = gadget.bindings.DOCTOR;
     const resource = edge && this.storage.gatekeepers.get(edge.target);
-    if (!gadget.privateReadOutput || resource?.systemResource?.type !== "doctorRead") return undefined;
+    if (!gadget.privateReadOutput || resource?.systemResource?.type !== "doctorRead") throw new Error("Pinned Doctor controls binding is unavailable.");
     if (!clientUserId || clientUserId !== this.ownerId) throw new Error("Private application controls require the authenticated owner.");
     return resource;
   }
@@ -5495,7 +5510,9 @@ class OverseerImpl implements AgentHooks {
   async getPrivateControlUi(gadgetId: WorkpieceId, clientUserId: string): Promise<UiBundle | undefined> {
     if (!this.getPrivateControlResource(gadgetId, clientUserId)) return undefined;
     if (!this.env.MILESVAULT_DOCTOR_APP) throw new Error("Private application controls unavailable.");
+    const release = this.getGadgetRecord(gadgetId).doctorControls!;
     const bundle = await this.env.MILESVAULT_DOCTOR_APP.getDoctorControlUi();
+    if (await doctorControlUiHash(bundle.jsCode) !== release.uiSha256) throw new Error("Pinned Doctor controls release is unavailable.");
     // The standard runtime supplies React/GadgetUI and host theme handling, not just Kumo CSS.
     return {jsCode: withGadgetKumo(bundle.jsCode)};
   }
@@ -10796,6 +10813,26 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     this.impl.bumpVersion([gadget.id]);
   }
 
+  /** Private trusted installation ingress only: callers must obtain explicit owner consent to this release hash.
+   * Not on OverseerApi/GadgetClient, and never called by READ provisioning or migration.
+   */
+  async optInDoctorControls(ownerId: string, gadgetId: WorkpieceId, uiSha256: string): Promise<void> {
+    if (!ownerId || ownerId !== this.impl.ownerId || !/^[a-f0-9]{64}$/.test(uiSha256)) throw new Error("Invalid Doctor controls consent.");
+    const gadget = this.impl.getGadgetRecord(gadgetId);
+    const edge = gadget.bindings.DOCTOR;
+    if (!gadget.privateReadOutput || !edge || this.impl.storage.gatekeepers.get(edge.target)?.systemResource?.type !== "doctorRead") {
+      throw new Error("Doctor READ installation is unavailable.");
+    }
+    if (gadget.doctorControls) {
+      if (gadget.doctorControls.version !== 1 || gadget.doctorControls.uiSha256 !== uiSha256 || gadget.doctorControls.ownerId !== ownerId) {
+        throw new Error("Doctor controls release is immutable; create a new installation.");
+      }
+      return;
+    }
+    this.impl.privateUiEpoch++;
+    this.impl.storage.gadgets.put({...gadget, doctorControls: {version: 1 as const, uiSha256, ownerId}});
+  }
+
   /** Only trusted blueprint creation may initialize this private, owner-key-bound read output. */
   async configureDoctorReadOutput(ownerId: string, ledgerKey: string, initialize = false): Promise<void> {
     if (this.impl.ownerId !== ownerId) return;
@@ -13647,8 +13684,13 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
     return this.impl.removeWorkpiece(this.id);
   }
 
+  #controlUiSha256?: string;
+
   async getUiBundle(chatId?: number): Promise<UiBundle | null> {
+    this.#controlUiSha256 = undefined;
+    const pin = this.impl.getGadgetRecord(this.id).doctorControls?.uiSha256;
     const bundle = await this.impl.getPrivateControlUi(this.id, this.clientUserId) ?? await this.impl.getGadgetUiBundle(this.id, chatId);
+    this.#controlUiSha256 = pin;
     // Negotiation reports compatibility only; it cannot add any RPC authority.
     if (bundle) bundle.managedDraft = this.impl.getManagedDraftDescriptor(this.id, this.clientUserId);
     return bundle;
@@ -13661,6 +13703,10 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
       chat_id: chatId,
       interaction_type: "gadget_ui_connected",
     });
+    const release = this.impl.getGadgetRecord(this.id).doctorControls;
+    if (release && this.#controlUiSha256 !== release.uiSha256) {
+      throw new Error("Load the pinned Doctor controls UI before connecting.");
+    }
     return this.impl.getGadgetUiSession(this.id, chatId, this.joinedAs, this.clientUserId);
   }
 
