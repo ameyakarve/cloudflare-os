@@ -1,5 +1,6 @@
 import type { SpecialistRecord } from '@gadgets/workshop-shared/specialists';
 import { parseSpecialists, specialistData, specialistOperation, SpecialistDispatcher, type SpecialistTools } from './specialists';
+import type { DoctorReadSession } from "@gadgets/workshop-shared/deployment-doctor";
 import type { DeploymentLedgerApplication, LedgerEditorSession, LedgerHoldingsSession, LedgerApplicationQueue, VaultReadSession } from "@gadgets/workshop-shared/deployment-ledger";
 import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, isDeploymentUsageError, UsageScope } from "./deployment-usage.js";
 import type { DeploymentUsage, DeploymentUsageRun, UsageGrant } from "@gadgets/workshop-shared/deployment-usage";
@@ -281,6 +282,29 @@ export class VaultReadGatekeeper extends DurableObject<Cloudflare.Env, LedgerHol
   async removeObserver(_id: string): Promise<void> {}
 }
 
+/** Private materialized Doctor read facet, never ambient and never a mutation capability. */
+export class DoctorReadGatekeeper extends DurableObject<Cloudflare.Env, LedgerHoldingsGatekeeperProps>
+    implements Gatekeeper<DoctorReadSession> {
+  async describe(): Promise<ResourceDescription> {
+    return {url: "https://milesvault.com/doctor/read", title: "Doctor findings", snippet: "Materialized findings; scan coverage unverified.", suggestedBindingName: "DOCTOR", tsType: "DoctorReadSession"};
+  }
+  getTypeScriptTypes() {
+    if (!this.env.MILESVAULT_DOCTOR_APP) throw new Error("Doctor read service unavailable.");
+    return this.env.MILESVAULT_DOCTOR_APP.getDoctorTypes();
+  }
+  async getAutoApprovableActions(): Promise<[]> { return []; }
+  async startSession(queue: NativeRpcStub<ApprovalQueue>): Promise<DoctorReadSession> {
+    if (!this.env.MILESVAULT_DOCTOR_APP) throw new Error("Doctor read service unavailable.");
+    using scope = new NativeRpcStub(new LedgerApplicationQueueAdapter(queue));
+    return await this.env.MILESVAULT_DOCTOR_APP.openDoctor(this.ctx.props.ledgerKey, scope);
+  }
+  async applyAction(_action: number): Promise<void> { throw new Error("Read-only capability."); }
+  async rejectAction(_action: number): Promise<void> { throw new Error("Read-only capability."); }
+  async revertAction(_action: number): Promise<void> { throw new Error("Read-only capability."); }
+  async addObserver(_id: string, _user: Fetcher): Promise<void> { throw new Error("Private Doctor cannot be shared."); }
+  async removeObserver(_id: string): Promise<void> {}
+}
+
 /** Stable persisted facet name; the deployment service owns the read-only holdings projection. */
 export class LedgerHoldingsGatekeeper
     extends DurableObject<Cloudflare.Env, LedgerHoldingsGatekeeperProps>
@@ -406,7 +430,7 @@ type GatekeeperRecord = {
   // lets their owning system output repair the binding idempotently without trusting a title or
   // URL supplied by some unrelated Gatekeeper.
   systemResource?: {
-    type: "ledger" | "ledgerHoldings" | "vaultRead";
+    type: "ledger" | "ledgerHoldings" | "vaultRead" | "doctorRead";
     identityKey: string;
   },
 
@@ -10699,6 +10723,36 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       record = {id, class: makeClass(), resourceTitle: "My Vault", resourceUrl: "https://milesvault.com/ledger/vault", systemResource: {type: "vaultRead", identityKey: ledgerKey}};
       this.impl.storage.gatekeepers.put(record);
       gadget.bindings.VAULT = {target: id};
+    } else if (record.systemResource.identityKey !== ledgerKey) {
+      this.impl.ctx.facets.abort(`gatekeeper${record.id}`, new Error("Private read identity changed."));
+      record.class = makeClass(); record.systemResource.identityKey = ledgerKey;
+      this.impl.storage.gatekeepers.put(record);
+    }
+    gadget.privateReadOutput = true;
+    this.impl.storage.gadgets.put(gadget);
+    this.impl.storage.prohibitAllSharing.put(true);
+    this.impl.bumpVersion([gadget.id]);
+  }
+
+  /** Only trusted blueprint creation may initialize this private, owner-key-bound read output. */
+  async configureDoctorReadOutput(ownerId: string, ledgerKey: string, initialize = false): Promise<void> {
+    if (this.impl.ownerId !== ownerId) return;
+    const gadgets = [...this.impl.storage.gadgets.list()].filter((g): g is GadgetRecord => g.type === "gadget" && g.output?.id === "doctor");
+    if (!gadgets.length) return;
+    if (gadgets.length !== 1) throw new Error("Private Doctor output is ambiguous.");
+    const gadget = gadgets[0];
+    if (!gadget.privateReadOutput && !initialize) return;
+    deploymentIdentity(ledgerKey);
+    const edge = gadget.bindings.DOCTOR;
+    let record = edge && this.impl.storage.gatekeepers.get(edge.target);
+    if (gadget.privateReadOutput && record?.systemResource?.type === "doctorRead" &&
+        record.systemResource.identityKey === ledgerKey && this.impl.storage.prohibitAllSharing.get()) return;
+    const makeClass = (): GatekeeperClass => this.impl.ctx.exports.DoctorReadGatekeeper({props: {ledgerKey}});
+    if (!record || record.systemResource?.type !== "doctorRead") {
+      const id = this.impl.allocateWorkpieceId();
+      record = {id, class: makeClass(), resourceTitle: "Doctor findings", resourceUrl: "https://milesvault.com/doctor/read", systemResource: {type: "doctorRead", identityKey: ledgerKey}};
+      this.impl.storage.gatekeepers.put(record);
+      gadget.bindings.DOCTOR = {target: id};
     } else if (record.systemResource.identityKey !== ledgerKey) {
       this.impl.ctx.facets.abort(`gatekeeper${record.id}`, new Error("Private read identity changed."));
       record.class = makeClass(); record.systemResource.identityKey = ledgerKey;

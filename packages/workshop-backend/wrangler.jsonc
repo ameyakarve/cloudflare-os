@@ -70,6 +70,10 @@
       // Private read-only Vault facet; no canonical storage namespace is added to Workshop.
       "tag": "v5",
       "new_sqlite_classes": [ "VaultReadGatekeeper" ]
+    },
+    {
+      "tag": "v6",
+      "new_sqlite_classes": [ "DoctorReadGatekeeper" ]
     }
   ],
 

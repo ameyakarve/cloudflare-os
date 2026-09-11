@@ -79,6 +79,7 @@ export default defineConfig({
           TEST_LANGUAGE_MODEL: { className: 'LanguageModelGatekeeper', useSQLite: true },
           TEST_LEDGER_HOLDINGS: { className: 'LedgerHoldingsGatekeeper', useSQLite: true },
           TEST_VAULT_READ: { className: 'VaultReadGatekeeper', useSQLite: true },
+          TEST_DOCTOR_READ: { className: 'DoctorReadGatekeeper', useSQLite: true },
           TEST_IDENTITY_GATEKEEPER: { className: 'IdentityTestGatekeeper', useSQLite: true },
         },
       },

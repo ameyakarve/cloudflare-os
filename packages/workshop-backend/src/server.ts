@@ -22,7 +22,7 @@ import { getAiGatewayConfig } from "./ai-gateway.js";
 import { AdminSettings, AdminApiImpl } from "./admin-settings.js";
 import { BlueprintKvRecord, buildBlueprintArchiveStream, sanitizeBlueprintOutput, listFeaturedBlueprintsFromKv, parseBlueprintArchive, randomBlueprintId, readBlueprintContent, readBlueprintKvRecord } from "./blueprint-archive.js";
 import { GatekeeperConnectCallbackImpl, normalizeUsername, UserDurableObject, CLOUDFLARE_VENDOR_ID } from "./user";
-import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback, LedgerEditorGatekeeper, LedgerHoldingsGatekeeper, VaultReadGatekeeper } from "./overseer";
+import { OverseerDurableObject, GatekeeperLoopback, CodeModeTailLoopback, AgentSpawnerGatekeeper, GatekeeperHookLoopback, GadgetTailLoopback, AgentSelfLoopback, TransientStubLoopback, LedgerEditorGatekeeper, LedgerHoldingsGatekeeper, VaultReadGatekeeper, DoctorReadGatekeeper } from "./overseer";
 import { ExternalMessageGateway } from "./external-message-gateway";
 import { RpcStub as NativeRpcStub } from "cloudflare:workers";
 import { recordAnalytics } from "./analytics";
@@ -59,7 +59,7 @@ export { UserDurableObject, GatekeeperConnectCallbackImpl };
 // Re-export entrypoint types from overseer.ts.
 export { OverseerDurableObject, GatekeeperLoopback, GatekeeperHookLoopback,
     CodeModeTailLoopback, AgentSpawnerGatekeeper, GadgetTailLoopback,
-    AgentSelfLoopback, TransientStubLoopback, LedgerEditorGatekeeper, LedgerHoldingsGatekeeper, VaultReadGatekeeper };
+    AgentSelfLoopback, TransientStubLoopback, LedgerEditorGatekeeper, LedgerHoldingsGatekeeper, VaultReadGatekeeper, DoctorReadGatekeeper };
 
 // Re-export service-binding entrypoint for external channel integrations.
 export { ExternalMessageGateway };
@@ -302,6 +302,8 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
             this.#userId.toString(), await this.#ledgerIdentityKey());
     await this.overseers.get(this.overseers.idFromString(id))
         .configureVaultReadOutput(this.#userId.toString(), await this.#ledgerIdentityKey());
+    await this.overseers.get(this.overseers.idFromString(id))
+        .configureDoctorReadOutput(this.#userId.toString(), await this.#ledgerIdentityKey());
     // Direct links can open My Ledger without visiting Outputs first. Repair its deployment-owned
     // first-class binding at this authenticated boundary before any gadget code can run.
     if (await this.#user.getSystemOutputWorkspace("ledger") === id) {
@@ -534,6 +536,9 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     if (systemOutputKey === "ledger") {
       await overseerDo.configureMilesVaultLedgerOutput(
           this.#userId.toString(), await this.#ledgerIdentityKey());
+    } else if (blueprintId === "milesvault.doctor") {
+      await overseerDo.configureDoctorReadOutput(
+        this.#userId.toString(), await this.#ledgerIdentityKey(), true);
     } else if (blueprintId === "milesvault.vault") {
       await overseerDo.configureVaultReadOutput(
           this.#userId.toString(), await this.#ledgerIdentityKey(), true);
