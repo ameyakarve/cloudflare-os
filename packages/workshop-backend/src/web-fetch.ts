@@ -25,8 +25,18 @@ import type { AiGatewayConfig } from "./ai-gateway";
  * so the caller can pass a stub in tests without constructing a full Cloudflare.Env.
  */
 export type WebFetchEnv = {
-  ai: Ai;
+  ai: Pick<Ai, "toMarkdown">;
   gateway: AiGatewayConfig | null;
+  /** Host-owned run cancellation; never supplied by tool input. */
+  signal?: AbortSignal;
+  /**
+   * Reserve one externalRequests unit before each HTTP hop or conversion dispatch.
+   * This is a conservative resource allowance, not a financial charge or cost receipt.
+   * A reservation remains consumed on failure/cancellation, including a late grant that
+   * arrives after Stop. Conversion cost is unknown; the binding cannot cancel an
+   * already-dispatched conversion (we stop waiting and discard its late result).
+   */
+  beforeDispatch?: () => Promise<void>;
 };
 
 export type WebFetchInput = {
@@ -91,19 +101,25 @@ export function validateWebFetchUrl(input: string): URL {
 async function readBodyCapped(
   response: Response,
   maxBytes: number,
+  signal: AbortSignal,
 ): Promise<{ bytes: Uint8Array; truncated: boolean }> {
   if (!response.body) {
     return { bytes: new Uint8Array(0), truncated: false };
   }
 
   const reader = response.body.getReader();
+  const cancel = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) cancel();
   const chunks: Uint8Array[] = [];
   let total = 0;
   let truncated = false;
 
   try {
     while (true) {
+      signal.throwIfAborted();
       const { value, done } = await reader.read();
+      signal.throwIfAborted();
       if (done) break;
       if (!value) continue;
 
@@ -122,14 +138,9 @@ async function readBodyCapped(
       total += value.byteLength;
     }
   } finally {
-    // If we stopped early, cancel the rest of the stream to free server-side resources.
-    if (truncated) {
-      try {
-        await reader.cancel();
-      } catch {
-        // Ignore.
-      }
-    }
+    signal.removeEventListener("abort", cancel);
+    // Cancellation must not extend the operation's deadline.
+    if (truncated || signal.aborted) cancel();
     reader.releaseLock();
   }
 
@@ -152,8 +163,8 @@ function baseContentType(contentType: string): string {
   return (i >= 0 ? contentType.slice(0, i) : contentType).trim().toLowerCase();
 }
 
-// MIME types that `env.WORKERS_AI.toMarkdown()` can convert for free (no Workers AI model
-// usage). Derived from the public list of supported formats:
+// Supported non-image conversion MIME types. We do not infer financial cost from this
+// allow-list: every conversion consumes an external-request allowance unit. Derived from:
 // https://developers.cloudflare.com/workers-ai/features/markdown-conversion/supported-formats/
 //
 // Image MIME types are intentionally excluded -- image conversion uses paid Workers AI
@@ -196,6 +207,7 @@ async function convertToMarkdown(
   bytes: Uint8Array,
   contentType: string,
   url: URL,
+  beforeDispatch: () => Promise<void>,
 ): Promise<string | null> {
   const mime = baseContentType(contentType);
   if (!TO_MARKDOWN_MIME_TYPES.has(mime)) {
@@ -205,6 +217,7 @@ async function convertToMarkdown(
   // Build a name from the URL path so toMarkdown's format detection has a hint.
   const pathBasename = url.pathname.split("/").filter(Boolean).pop() || "document";
 
+  await beforeDispatch();
   const result = await env.ai.toMarkdown(
     {
       name: pathBasename,
@@ -265,78 +278,83 @@ export function formatWebFetchResult(result: WebFetchResult): string {
   return lines.join("\n");
 }
 
+/** Fetch and optionally convert under one absolute deadline and host-owned dispatch allowance. */
 export async function webFetch(
   env: WebFetchEnv,
   input: WebFetchInput,
 ): Promise<WebFetchResult> {
-  const parsed = validateWebFetchUrl(input.url);
-
+  let url = validateWebFetchUrl(input.url);
   const requestedMax = input.maxBytes ?? DEFAULT_MAX_BYTES;
-  const maxBytes = Math.min(
-    Math.max(1, Math.floor(requestedMax)),
-    HARD_MAX_BYTES,
-  );
-
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), FETCH_TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await fetch(parsed.toString(), {
-      method: "GET",
-      redirect: "follow",
-      headers: {
-        "user-agent": USER_AGENT,
-        "accept": "text/markdown,text/html;q=0.9,text/plain;q=0.9,application/json;q=0.9,application/xhtml+xml;q=0.9,*/*;q=0.8",
-      },
-      signal: abortController.signal,
-    });
-  } catch (err) {
-    if (
-      err instanceof Error &&
-      (err.name === "AbortError" || /abort/i.test(err.message))
-    ) {
-      throw new Error(`Fetch timed out after ${FETCH_TIMEOUT_MS}ms`, { cause: err });
-    }
-    throw err;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-
-  // `response.url` is set by the runtime to the final URL after any redirects. Fall back
-  // to the original URL if it happens to be empty.
-  const finalUrl = response.url ? new URL(response.url) : parsed;
-  const contentType = response.headers.get("content-type") ?? "";
-
-  // Respect the Content-Signal header (https://contentsignals.org/). If the site
-  // explicitly sets `ai-input=no`, we must not feed its content to the AI agent.
-  if (contentSignalDenies(response, "ai-input")) {
-    try {
-      await response.body?.cancel();
-    } catch {
-      // Ignore.
-    }
-    throw new Error(
-      `The site at ${finalUrl} sets Content-Signal: ai-input=no, indicating that ` +
-        `it does not permit its content to be used as AI input.`,
-    );
-  }
-
-  const { bytes, truncated } = await readBodyCapped(response, maxBytes);
-
-  let body: string;
-  if (input.raw) {
-    body = decodeUtf8(bytes);
-  } else {
-    const md = await convertToMarkdown(env, bytes, contentType, finalUrl);
-    body = md !== null ? md : decodeUtf8(bytes);
-  }
-
-  return {
-    status: response.status,
-    finalUrl: finalUrl.toString(),
-    contentType,
-    body,
-    truncated,
+  if (!Number.isFinite(requestedMax)) throw new Error("maxBytes must be finite");
+  const maxBytes = Math.min(Math.max(1, Math.floor(requestedMax)), HARD_MAX_BYTES);
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const parentAbort = () => controller.abort(env.signal?.reason);
+  env.signal?.addEventListener("abort", parentAbort, { once: true });
+  if (env.signal?.aborted) parentAbort();
+  const timeout = setTimeout(() => controller.abort(
+    new Error(`Fetch timed out after ${FETCH_TIMEOUT_MS}ms`)), FETCH_TIMEOUT_MS);
+  let onAbort: () => void = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+  const beforeDispatch = async () => {
+    signal.throwIfAborted();
+    await env.beforeDispatch?.();
+    // A late accounting reply must never authorize work after Stop/deadline.
+    signal.throwIfAborted();
   };
+  const execute = async (): Promise<WebFetchResult> => {
+    for (let redirects = 0; ; redirects++) {
+      await beforeDispatch();
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        // Every hop passes URL validation and workerd's post-DNS public-IP filter.
+        redirect: "manual",
+        headers: {
+          "user-agent": USER_AGENT,
+          "accept": "text/markdown,text/html;q=0.9,text/plain;q=0.9,application/json;q=0.9,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        },
+        signal,
+      });
+      const discard = () => { void response.body?.cancel().catch(() => {}); };
+      if (signal.aborted) { discard(); signal.throwIfAborted(); }
+      if (contentSignalDenies(response, "ai-input")) {
+        discard();
+        throw new Error("The site sets Content-Signal: ai-input=no; its content cannot be used as AI input.");
+      }
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        discard();
+        if (redirects >= 5) throw new Error("Fetch redirect limit exceeded");
+        const location = response.headers.get("location");
+        if (!location) throw new Error("Fetch redirect is missing Location");
+        url = validateWebFetchUrl(new URL(location, url).toString());
+        continue;
+      }
+      const contentType = response.headers.get("content-type") ?? "";
+      const { bytes, truncated } = await readBodyCapped(response, maxBytes, signal);
+      signal.throwIfAborted();
+      const md = input.raw ? null : await convertToMarkdown(env, bytes, contentType, url, beforeDispatch);
+      signal.throwIfAborted();
+      const body = md ?? decodeUtf8(bytes);
+      return {
+        status: response.status,
+        finalUrl: url.toString(),
+        contentType,
+        // Also bound conversion expansion (characters); source bytes are capped above.
+        body: body.slice(0, maxBytes),
+        truncated: truncated || body.length > maxBytes,
+      };
+    }
+  };
+  try {
+    // Includes reservation, headers, body and conversion, even if a binding ignores abort.
+    return await Promise.race([aborted, execute()]);
+  } finally {
+    clearTimeout(timeout);
+    env.signal?.removeEventListener("abort", parentAbort);
+    signal.removeEventListener("abort", onAbort);
+  }
 }

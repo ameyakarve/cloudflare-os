@@ -592,10 +592,10 @@ export interface AgentHooks {
 
   /**
    * Returns the resources needed by `webFetch` to delegate document-to-Markdown conversion
-   * to Workers AI. Exposed as a narrow interface (rather than handing over the whole `env`)
-   * so the dependency surface stays explicit.
+   * to Workers AI, plus this chat's cancellation and shared-run dispatch reservation.
+   * Exposed narrowly, without the full env or authority to mint a fresh child allowance.
    */
-  getWebFetchEnv(): WebFetchEnv;
+  getWebFetchEnv(chatId: number): WebFetchEnv;
 
   /**
    * Deployment-wide, admin-authored instructions to append to the agent's system prompt. Returns
@@ -2878,7 +2878,7 @@ export async function runAgent(
       }),
       execute: async (toolCallId, {url, raw}) => {
         try {
-          let result = await webFetchImpl(hooks.getWebFetchEnv(), {url, raw});
+          let result = await webFetchImpl(hooks.getWebFetchEnv(chatId), {url, raw});
 
           let host = new URL(result.finalUrl).host;
           await hooks.recordAgentObservation(

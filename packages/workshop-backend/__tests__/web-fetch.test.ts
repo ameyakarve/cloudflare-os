@@ -24,10 +24,8 @@ function makeEnv(toMarkdown?: ToMarkdownStub, gateway: AiGatewayConfig | null = 
       data: `[converted from ${doc.blob.type}]`,
     }));
 
-  // The Ai type has many methods we don't use; cast through unknown so we only need to
-  // provide what webFetch actually touches.
   return {
-    ai: { toMarkdown: stub } as unknown as Ai,
+    ai: { toMarkdown: stub },
     gateway,
   };
 }

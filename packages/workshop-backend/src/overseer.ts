@@ -6002,7 +6002,7 @@ class OverseerImpl implements AgentHooks {
 
   // Provides web-fetch with the Workers AI binding and AI Gateway config it needs to call
   // `env.WORKERS_AI.toMarkdown()`. The initiator is needed for AI Gateway metadata.
-  getWebFetchEnv(): WebFetchEnv {
+  getWebFetchEnv(chatId: number): WebFetchEnv {
     if (this.storage.prohibitAllSharing.get()) {
       // TODO: Disallwing fetches is a bit draconian. Ideally, we would have some way to detect
       //   if a URL is well-known, and therefore not a leak problem. E.g. if the URL is already in
@@ -6013,9 +6013,23 @@ class OverseerImpl implements AgentHooks {
           "from fetching from public web sites.");
     }
 
+    const chat = this.#liveChats.get(chatId);
+    if (!chat) throw new DeploymentUsageError("expired_run");
+    const scope = chat.usageScope;
+    if (deploymentUsageEnabled(this.env) && !scope) throw new DeploymentUsageError();
     return {
       ai: this.env.WORKERS_AI,
       gateway: getAiGatewayConfig(this.env),
+      signal: chat.cancelController.signal,
+      beforeDispatch: async () => {
+        // Root and specialists already share this scope. Never mint a fallback allowance.
+        if (this.#liveChats.get(chatId) !== chat || chat.usageScope !== scope) {
+          throw new DeploymentUsageError("expired_run");
+        }
+        chat.cancelController.signal.throwIfAborted();
+        await scope?.reserve({ externalRequests: 1 });
+        chat.cancelController.signal.throwIfAborted();
+      },
     };
   }
 
