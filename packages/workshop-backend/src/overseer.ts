@@ -333,6 +333,8 @@ class RestoreForgerImpl extends NativeRpcTarget {
 
 // Per-chat in-memory state, used while an agent is running or agent callbacks are pending.
 type LiveChatContext = {
+  executionId?: string;
+  specialistRootId?: string;
   specialistSelectionErrors?: number;
   usageScope?: UsageScope;
   // Abort controller for the running agent (if any).
@@ -1026,6 +1028,9 @@ type ExternalChatRecord = {
 };
 
 type ActiveAgentRecord = {
+  // Recovery assigns legacy rows an identity synchronously before any await.
+  executionId?: string;
+  stopRequested?: boolean;
   // Durable specialist root linkage, reused (never recreated) after a reset.
   specialistRootId?: string;
   // Invalid selections consume a run-local correction allowance, even before a root is allocated.
@@ -1944,6 +1949,12 @@ class OverseerImpl implements AgentHooks {
     // Reject all queued callbacks.
     for (let cb of ctx.pendingAgentCallbacks) cb.reject(error);
 
+    // Deletion removes the row before destroying live state. The identity-guarded finalizer
+    // can no longer unregister it, so the synchronous destructive path owns that transition.
+    const record = this.storage.activeAgents.get(chatId);
+    if (ctx.executionId && (!record || record.executionId === ctx.executionId)) {
+      this.#unregisterRunningAgent(chatId);
+    }
     this.#liveChats.delete(chatId);
     this.invalidateChatContent(chatId);
   }
@@ -1968,13 +1979,15 @@ class OverseerImpl implements AgentHooks {
   }
 
   // Tear down all bookkeeping for a finished agent turn: remove it from the in-memory registry,
-  // delete its persistent `activeAgents` record, and clear the keep-alive alarm if no agents remain.
+  // delete its resumable record (retain stopped fences), and clear the alarm if no agents remain.
   // MUST be called synchronously together with clearing `chatMeta.activeAgent`, so that the moment
   // the chat is observably idle, no stale records of the previous agent remain (which would
   // otherwise interfere if the user immediately starts a new agent).
   #unregisterRunningAgent(chatId: number) {
     this.#runningAgents.delete(chatId);
-    this.storage.activeAgents.delete(chatId);
+    // Keep the stopped row as a callback/recovery fence until an explicit new turn replaces it.
+    // Missing rows also fail execution identity checks, but would let callbacks create a new turn.
+    if (!this.storage.activeAgents.get(chatId)?.stopRequested) this.storage.activeAgents.delete(chatId);
     if (this.#runningAgents.size === 0) {
       // One -> zero running agents: replace the keep-alive alarm with any response-target retry/sweep
       // alarm that is now due, and wake any `alarm()` waiter.
@@ -2037,6 +2050,7 @@ class OverseerImpl implements AgentHooks {
   // DO (we don't persist the secret API token), then runs the agent loop, which rebuilds its state
   // by replaying the persisted chat log.
   async #resumeAgent(record: ActiveAgentRecord, liveChat: LiveChatContext) {
+    if (!this.#executionCanRun(record.chatId, liveChat)) return;
     let aiModel: UserAiModelRecord | undefined;
     try {
       let user = this.users.get(this.users.idFromString(record.initiatorUserId));
@@ -2049,6 +2063,10 @@ class OverseerImpl implements AgentHooks {
       });
     }
 
+    if (!this.#executionCanRun(record.chatId, liveChat)) {
+      this.#finishInterruptedExecution(record.chatId, liveChat);
+      return;
+    }
     if (!aiModel) {
       // The model is no longer available; we can't resume. Post an error and clear state. Clear
       // `activeAgent` and tear down the registry/record atomically (matching `#runAgentTurn`'s
@@ -2147,10 +2165,19 @@ class OverseerImpl implements AgentHooks {
   // it'll recognize that agents are running and wait for them.
   #resumeInterruptedAgents(): void {
     for (let record of Array.from(this.storage.activeAgents.list())) {
+      if (!record.executionId) {
+        record.executionId = crypto.randomUUID();
+        this.storage.activeAgents.put(record);
+      }
+      // Do not resolve models or usage for stopped work. Retain accounting evidence;
+      // the metadata sweep below makes the chat idle without replaying it.
+      if (record.stopRequested) continue;
       // Register the running agent immediately (see above), and create the LiveChatContext
       // synchronously, so that cancellations are immediately respected.
       this.#registerRunningAgent(record.chatId);
       let liveChat = this.#getLiveChat(record.chatId);
+      liveChat.executionId = record.executionId;
+      liveChat.specialistRootId = record.specialistRootId;
 
       this.#resumeAgent(record, liveChat);
     }
@@ -7088,11 +7115,63 @@ class OverseerImpl implements AgentHooks {
     this.#updateExternalMessageResponseDeliveryAlarm();
   }
 
-  cancelAgent(chatId: number) {
-    let ctx = this.#liveChats.get(chatId);
-    if (ctx) {
-      ctx.cancelController.abort(new Error("User requested to stop agent."));
+  #ownsExecution(chatId: number, liveChat: LiveChatContext): boolean {
+    return !!liveChat.executionId && this.#liveChats.get(chatId) === liveChat &&
+      this.storage.activeAgents.get(chatId)?.executionId === liveChat.executionId;
+  }
+
+  #executionCanRun(chatId: number, liveChat: LiveChatContext): boolean {
+    return this.#ownsExecution(chatId, liveChat) &&
+      !this.storage.activeAgents.get(chatId)?.stopRequested && !liveChat.cancelController.signal.aborted;
+  }
+
+  #assertExecutionCanRun(chatId: number, liveChat: LiveChatContext): void {
+    if (!this.#executionCanRun(chatId, liveChat)) throw new Error("Agent execution stopped or replaced.");
+  }
+
+  // Recovery can lose permission before a turn takes ownership of finalization.
+  #finishInterruptedExecution(chatId: number, liveChat: LiveChatContext): void {
+    if (!this.#ownsExecution(chatId, liveChat)) return;
+    const meta = this.storage.chatMeta.get(chatId);
+    if (meta) { delete meta.activeAgent; this.storage.chatMeta.put(meta); }
+    this.#unregisterRunningAgent(chatId);
+    this.#liveChats.delete(chatId);
+    this.#deliverWaitingExternalMessageResponse(chatId);
+  }
+
+  /** Stop the execution current at entry; ACK means durable intent, not external-work recall. */
+  async cancelAgent(chatId: number): Promise<void> {
+    // A live specialist shares its coordinator's controller and allowance. Stop that captured
+    // execution durably, never a newer coordinator that happens to reuse the same chat.
+    const childRoot = this.#specialistChildren.get(chatId)?.root;
+    const rootChatId = childRoot && this.getChatAgentContext(chatId).specialist?.rootChatId;
+    if (rootChatId !== undefined && rootChatId !== chatId && this.#liveChats.get(rootChatId) === childRoot) {
+      return this.cancelAgent(rootChatId);
     }
+    const record = this.storage.activeAgents.get(chatId);
+    const liveChat = this.#liveChats.get(chatId);
+    if (record) {
+      record.executionId ??= crypto.randomUUID();
+      record.stopRequested = true;
+      this.storage.activeAgents.put(record);
+    }
+    if (liveChat && (!record || liveChat.executionId === record.executionId)) {
+      const error = new Error("User requested to stop agent.");
+      liveChat.cancelController.abort(error);
+      liveChat.usageScope?.controller.abort(error);
+      for (const cb of liveChat.pendingAgentCallbacks) cb.reject(error);
+      liveChat.pendingAgentCallbacks = [];
+      for (const cb of liveChat.activeAgentCallbacks.values()) cb.reject(error);
+      liveChat.activeAgentCallbacks.clear();
+    }
+    if (record && !liveChat) {
+      // There is no finalizer to make this orphan idle. Keep the stopped row, not a spinner.
+      const meta = this.storage.chatMeta.get(chatId);
+      if (meta) { delete meta.activeAgent; this.storage.chatMeta.put(meta); }
+      this.#unregisterRunningAgent(chatId);
+    }
+    // Fail rather than ACK on flush failure; also applies to repeated/no-controller Stop.
+    await this.ctx.storage.sync();
   }
 
   // Describe a workpiece -- a gadget or a gatekeeper -- reachable as `envName` in a chat's env,
@@ -7261,16 +7340,31 @@ class OverseerImpl implements AgentHooks {
              keepAlive: boolean = false): void {
     // Register before starting the turn so registration always precedes the turn's teardown
     // (`#unregisterRunningAgent`, in `#runAgentTurn`'s finally).
+    const previous = this.storage.activeAgents.get(chatId);
+    if (previous && (!previous.stopRequested || this.#runningAgents.has(chatId))) {
+      throw new Error("Agent execution is still active.");
+    }
     this.#registerRunningAgent(chatId);
+    const executionId = crypto.randomUUID();
     this.storage.activeAgents.put({
       chatId,
+      executionId,
       initiatorUserId,
       modelId: aiModel.profile.id,
       initiator,
       callbackInitiated,
     });
 
-    let liveChat = this.#getLiveChat(chatId);
+    const pending = this.#getLiveChat(chatId);
+    // A new explicit start must not inherit work whose asynchronous admission still belongs
+    // to the previous context. Callback starts already moved their batch into active callbacks.
+    for (const cb of pending.pendingAgentCallbacks) cb.reject(new Error("Callback execution replaced."));
+    const liveChat: LiveChatContext = {
+      executionId, cancelController: new AbortController(),
+      pendingAgentCallbacks: [],
+      activeAgentCallbacks: new Map(pending.activeAgentCallbacks),
+    };
+    this.#liveChats.set(chatId, liveChat);
     let turn = this.#runAgentTurn(chatId, aiModel, initiator, callbackInitiated, liveChat);
     if (keepAlive) this.ctx.waitUntil(turn);
   }
@@ -7312,12 +7406,15 @@ class OverseerImpl implements AgentHooks {
       if (this.getChatAgentContext(chatId).specialist) {
         throw new Error('Specialist chats are immutable execution history. Send a new request to the coordinator.');
       }
-      const activeRecord = this.storage.activeAgents.get(chatId);
-      liveChat.usageScope = await this.newUsageScope(activeRecord?.deploymentUsageRun);
+      this.#assertExecutionCanRun(chatId, liveChat);
+      liveChat.usageScope = await this.newUsageScope(this.storage.activeAgents.get(chatId)?.deploymentUsageRun);
+      this.#assertExecutionCanRun(chatId, liveChat);
       if (liveChat.usageScope) {
-        if (activeRecord && !activeRecord.deploymentUsageRun) {
-          activeRecord.deploymentUsageRun = liveChat.usageScope.grant;
-          this.storage.activeAgents.put(activeRecord);
+        // Compare above and re-read AFTER admission; never restore a pre-Stop snapshot.
+        const current = this.storage.activeAgents.get(chatId)!;
+        if (!current.deploymentUsageRun) {
+          current.deploymentUsageRun = liveChat.usageScope.grant;
+          this.storage.activeAgents.put(current);
         }
         const signal = liveChat.usageScope.controller.signal;
         usageAbort = () => liveChat.cancelController.abort(signal.reason);
@@ -7328,6 +7425,7 @@ class OverseerImpl implements AgentHooks {
         accessWatch = await watchDeploymentAccess(
             () => this.checkDeploymentAccess(initiator),
             error => liveChat.cancelController.abort(error));
+        this.#assertExecutionCanRun(chatId, liveChat);
       }
 
       // Reap any provisional gadgets orphaned by a crashed prior turn before snapshotting
@@ -7336,6 +7434,7 @@ class OverseerImpl implements AgentHooks {
       // reconcilePendingGadgets). The model then simply re-creates a reaped gadget if it still
       // wants it.
       await this.reconcilePendingGadgets(chatId);
+      this.#assertExecutionCanRun(chatId, liveChat);
 
       // Turn-start materialization: live rows recorded before this turn (user edits, for turns
       // not started via sendChatMessage -- callbacks, resumes) become a durable "changes"
@@ -7352,6 +7451,7 @@ class OverseerImpl implements AgentHooks {
       if (!callbackInitiated && this.ownerId) {
         let ownerStub = this.users.get(this.users.idFromString(this.ownerId));
         let usage = await checkUsageAndBalance(this.env, ownerStub);
+        this.#assertExecutionCanRun(chatId, liveChat);
         if (!usage.allowed) {
           this.postAgentErrorMessage(chatId, aiModel.profile,
               usage.reason ?? "Usage limit reached.", "usage_limit");
@@ -7371,6 +7471,7 @@ class OverseerImpl implements AgentHooks {
       }
 
       let sessionAffinity = await computeSessionAffinity(this.ctx.id.toString(), chatId);
+      this.#assertExecutionCanRun(chatId, liveChat);
       let chosenModel = getModel(
           this.env, aiModel.config, initiator, {
             sessionAffinity,
@@ -7386,6 +7487,7 @@ class OverseerImpl implements AgentHooks {
       let hasBeenNudged = false;
       let outcome: "ok" | "callbacks_stalled" = "ok";
       while (true) {
+        this.#assertExecutionCanRun(chatId, liveChat);
         let checkpoint = this.getActiveChatCompaction(chatId);
         let chatMessages = this.#listChatTail(chatId, checkpoint);
         let callbackCountBefore = liveChat.activeAgentCallbacks.size;
@@ -7398,6 +7500,7 @@ class OverseerImpl implements AgentHooks {
               modelConfig: aiModel.config,
               measuredTokens: this.getChatMetaOrThrow(chatId).totalTokens ?? 0,
             }, specialistTools);
+        this.#assertExecutionCanRun(chatId, liveChat);
         if (newCheckpoint) this.#commitChatCompaction(chatId, newCheckpoint);
         // `/compact` is done once it has compacted. An automatic compaction returned before
         // prompting the model, so rerun the turn now that the history is shorter. Each compaction
@@ -7457,7 +7560,7 @@ class OverseerImpl implements AgentHooks {
         durationMs: Date.now() - startedAt,
       });
     } catch (err: unknown) {
-      const rootId = this.storage.activeAgents.get(chatId)?.specialistRootId;
+      const rootId = liveChat.specialistRootId;
       const root = rootId ? this.storage.specialistRecords.get(rootId) : undefined;
       if (root?.status === 'running') this.#finishSpecialistRecord(root,
         liveChat.cancelController.signal.aborted ? 'unknown' : 'failed', 'Coordinator turn interrupted.');
@@ -7493,7 +7596,9 @@ class OverseerImpl implements AgentHooks {
         durationMs: Date.now() - startedAt,
       });
 
-      this.postAgentErrorMessage(chatId, aiModel.profile, errorMessage);
+      if (this.#ownsExecution(chatId, liveChat)) {
+        this.postAgentErrorMessage(chatId, aiModel.profile, errorMessage);
+      }
 
       // Reject any pending agent callback return promises.
       let error = err instanceof Error ? err : new Error(`${err}`);
@@ -7502,15 +7607,16 @@ class OverseerImpl implements AgentHooks {
       }
       liveChat.activeAgentCallbacks.clear();
     } finally {
-      const rootId = this.storage.activeAgents.get(chatId)?.specialistRootId;
+      const rootId = liveChat.specialistRootId;
       const rootRecord = rootId ? this.storage.specialistRecords.get(rootId) : undefined;
       if (rootRecord?.status === 'running') {
-        const last = [...this.storage.chats.list({prefix: `${keyString(chatId)}.`, reverse: true, limit: 1})][0];
+        const last = this.#ownsExecution(chatId, liveChat)
+          ? [...this.storage.chats.list({prefix: `${keyString(chatId)}.`, reverse: true, limit: 1})][0] : undefined;
         const records = [...this.storage.specialistRecords.byRoot.list({prefix: rootRecord.id})]
           .filter(r => r.id !== rootRecord.id);
         const uncertain = records.some(r => r.status === 'unknown' || r.status === 'prepared' || r.status === 'running');
         this.#finishSpecialistRecord(rootRecord,
-          liveChat.cancelController.signal.aborted || uncertain ? 'unknown'
+          !this.#ownsExecution(chatId, liveChat) || liveChat.cancelController.signal.aborted || uncertain ? 'unknown'
             : records.some(r => r.status === 'pending-approval') ? 'pending-approval' : 'completed',
           last?.type === 'message' ? last.message : undefined);
       }
@@ -7530,39 +7636,33 @@ class OverseerImpl implements AgentHooks {
       // barrier (the turn erred or was aborted mid-step): the record is unstamped and the
       // step's message is by construction lost, so nothing in the log backs it. Never throws,
       // so it can't mask an error propagating out of the turn.
-      await this.reconcilePendingGadgets(chatId);
+      if (this.#ownsExecution(chatId, liveChat)) await this.reconcilePendingGadgets(chatId);
 
-      // Note: We no longer emit a stream "clear" event here. The client performs a full clear of
-      // provisional streaming state when it observes that the agent is no longer running (i.e. when
-      // chat metadata's activeAgent becomes unset, which happens just below).
+      if (this.#ownsExecution(chatId, liveChat)) {
+        // Metadata, registry and live state transition together, after the last cleanup await.
+        // The client clears provisional streaming state when activeAgent becomes unset.
+        let meta = this.storage.chatMeta.get(chatId);
+        if (meta) {
+          delete meta.activeAgent;
+          meta.lastActive = this.getChatTimestamp();
+          this.storage.chatMeta.put(meta);
+        }
+        this.#unregisterRunningAgent(chatId);
 
-      let meta = this.storage.chatMeta.get(chatId);
-      if (meta) {
-        delete meta.activeAgent;
-        meta.lastActive = this.getChatTimestamp();
-        this.storage.chatMeta.put(meta);
-      }
+        // Resolve callback returns that weren't explicitly returned (they get undefined).
+        for (let [, cb] of liveChat.activeAgentCallbacks) cb.resolve(undefined);
+        liveChat.activeAgentCallbacks.clear();
 
-      // Tear down the registry entry, persistent `activeAgents` record, and keep-alive alarm in the
-      // same synchronous step as clearing `activeAgent` above, so the chat never appears idle while
-      // stale records of this agent linger. If pending callbacks below restart the agent, they'll
-      // re-register everything consistently.
-      this.#unregisterRunningAgent(chatId);
-
-      // Resolve any agent callback returns that weren't explicitly returned (they get undefined).
-      for (let [, cb] of liveChat.activeAgentCallbacks) {
-        cb.resolve(undefined);
-      }
-      liveChat.activeAgentCallbacks.clear();
-
-      // If any new messages were queued waiting for the agent to finish, deliver them now.
-      if (liveChat.pendingAgentCallbacks.length > 0) {
-        this.#startAgentForCallbacks(meta, liveChat);
-      } else {
-        this.#deliverWaitingExternalMessageResponse(chatId);
-
-        // LiveChatContext is now empty.
-        this.#liveChats.delete(chatId);
+        if (liveChat.cancelController.signal.aborted) {
+          for (const cb of liveChat.pendingAgentCallbacks) cb.reject(liveChat.cancelController.signal.reason);
+          liveChat.pendingAgentCallbacks = [];
+        }
+        if (liveChat.pendingAgentCallbacks.length > 0) {
+          this.#startAgentForCallbacks(meta, liveChat);
+        } else {
+          this.#deliverWaitingExternalMessageResponse(chatId);
+          this.#liveChats.delete(chatId);
+        }
       }
     }
   }
@@ -7632,8 +7732,11 @@ class OverseerImpl implements AgentHooks {
     let meta = this.storage.chatMeta.get(chatId);
     if (!meta) throw new Error("No such chatId: " + chatId);
 
+    // A callback is not authorization to restart stopped work.
+    if (this.storage.activeAgents.get(chatId)?.stopRequested) throw new Error("Agent execution stopped.");
     // Register this callback in the pending callbacks for the chat.
     let liveChat = this.#getLiveChat(chatId);
+    liveChat.cancelController.signal.throwIfAborted();
     let promise = new Promise<unknown>((resolve, reject) => {
       liveChat.pendingAgentCallbacks.push(
           { methodName, args, argsSummary, initiatorUserId, initiatorModelId, resolve, reject });
@@ -7665,6 +7768,11 @@ class OverseerImpl implements AgentHooks {
       if (!meta) throw new Error("Chat thread was deleted before callback was handled.");
 
       let chatId = meta.id;
+      const assertCurrent = () => {
+        liveChat.cancelController.signal.throwIfAborted();
+        if (this.#liveChats.get(chatId) !== liveChat) throw new Error("Callback execution replaced.");
+      };
+      assertCurrent();
 
       // Resolve the AI model based on the initiator of the first message. This means this
       // turn gets charged to the first initiator, even if it ends up handling multiple messages.
@@ -7672,6 +7780,7 @@ class OverseerImpl implements AgentHooks {
       let user = this.users.get(this.users.idFromString(callbacks[0].initiatorUserId));
 
       let userMeta = await user.getChatContext(callbacks[0].initiatorModelId);
+      assertCurrent();
 
       if (!userMeta.aiModel) {
         throw new Error("No AI model configured for agent callback processing.");
@@ -7682,6 +7791,7 @@ class OverseerImpl implements AgentHooks {
       let preparation = this.waitForChatMessagePreparation(chatId);
       while (preparation) {
         await preparation;
+        assertCurrent();
         preparation = this.waitForChatMessagePreparation(chatId);
       }
       meta = this.storage.chatMeta.get(chatId);
@@ -9037,8 +9147,10 @@ class OverseerImpl implements AgentHooks {
       liveChat: LiveChatContext): SpecialistTools | undefined {
     const config = parseSpecialists(this.env.DEPLOYMENT_SPECIALISTS, this.env);
     if (!config.profiles.length && ![...this.storage.specialistRecords.list({limit: 1})].length) return;
+    if (liveChat.executionId) this.#assertExecutionCanRun(chatId, liveChat);
     const active = this.storage.activeAgents.get(chatId);
     let rootRecord = active?.specialistRootId ? this.storage.specialistRecords.get(active.specialistRootId) : undefined;
+    liveChat.specialistRootId = rootRecord?.id;
     let busy = false;
     // An active record is authoritative even when its count is absent (a new originating run).
     const selectionErrors = () => (this.storage.activeAgents.get(chatId) ?? liveChat).specialistSelectionErrors ?? 0;
@@ -9046,6 +9158,7 @@ class OverseerImpl implements AgentHooks {
     const stopped = 'Specialist selection limit reached for this originating run. Stop; do not reconstruct ' +
       'the failed specialist workflow with generic tools or request a fresh allowance.';
     const validateSelection = (profileId: unknown, intentId: unknown) => {
+      if (liveChat.executionId) this.#assertExecutionCanRun(chatId, liveChat);
       liveChat.cancelController.signal.throwIfAborted();
       if (selectionExhausted()) throw new Error(stopped);
       const profile = config.profiles.find(p => p.id === profileId);
@@ -9101,7 +9214,10 @@ class OverseerImpl implements AgentHooks {
             status: 'running', usageRunId: liveChat.usageScope?.grant.runId,
             expiresAt: liveChat.usageScope?.grant.expiresAt});
           const current = this.storage.activeAgents.get(chatId);
-          if (current) { current.specialistRootId = rootRecord.id; this.storage.activeAgents.put(current); }
+          liveChat.specialistRootId = rootRecord.id;
+          if (current && current.executionId === liveChat.executionId && !current.stopRequested) {
+            current.specialistRootId = rootRecord.id; this.storage.activeAgents.put(current);
+          }
         }
         const previous = [...this.storage.specialistRecords.byRoot.list({prefix: rootRecord.id})];
         if (busy || rootRecord.status === 'unknown' ||
@@ -12728,7 +12844,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async stopAgent(chatId: number): Promise<void> {
-    this.impl.cancelAgent(chatId);
+    await this.impl.cancelAgent(chatId);
   }
 
   async retryAgent(chatId: number, modelId: string): Promise<void> {
