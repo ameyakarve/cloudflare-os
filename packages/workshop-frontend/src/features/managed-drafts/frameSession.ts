@@ -30,26 +30,41 @@ export class DraftFrameSession {
     this.port?.close()
     const channel = new MessageChannel()
     this.port = channel.port1
-    this.negotiationTimer = setTimeout(() => {
-      if (this.supported || !this.live) return
+    const fallback = () => {
+      if (this.supported || !this.live || !this.authorized()) return
+      clearTimeout(this.negotiationTimer)
       this.negotiationExpired = true
-      this.changed(null, 'This saved client did not negotiate draft recovery. Copy unsaved text before leaving; dirty state is not tracked.', false)
-    }, 1500)
+      this.port?.postMessage({ type: 'fallback', nonce: this.nonce, generation, blocked: !!this.candidate })
+      this.changed(null, this.candidate
+        ? 'Draft negotiation failed. Your retained draft is unchanged. Reload this view to retry recovery.'
+        : 'This saved client did not negotiate draft recovery. Copy unsaved text before leaving; dirty state is not tracked.', false)
+    }
+    this.negotiationTimer = setTimeout(fallback, 1500)
     this.port.addEventListener('message', event => {
       if (!this.live || !this.authorized()) return
       const data = event.data
       if (!data || data.nonce !== this.nonce || data.generation !== generation) return
-      if (data.type === 'ready' && data.protocol === 1 && !this.supported && !this.negotiationExpired) {
+      if (data.type === 'fallback') {
+        this.supported = false
+        this.ready = false
+        fallback()
+      } else if (data.type === 'ready' && this.negotiationExpired) {
+        fallback()
+      } else if (data.type === 'ready' && data.protocol === 1 && !this.supported && !this.negotiationExpired) {
         clearTimeout(this.negotiationTimer)
         this.supported = true
         this.changed(this.candidate, this.coordinator.warning, true)
         if (!this.candidate) this.choose(false)
+        else this.port?.postMessage({ type: 'pendingRestore', nonce: this.nonce, generation })
       } else if (data.type === 'snapshot' && this.ready && Number.isSafeInteger(data.sequence) && data.sequence > this.sequence &&
-          typeof data.payload === 'string' && data.payload.length * 2 <= 500 * 1024 && typeof data.dirty === 'boolean') {
-        try { JSON.parse(data.payload) } catch { return }
+          typeof data.payload === 'string' && typeof data.dirty === 'boolean') {
+        const oversized = data.payload.length * 2 > 500 * 1024
+        if (!oversized) { try { JSON.parse(data.payload) } catch { return } }
         this.sequence = data.sequence
-        const ok = data.dirty ? this.coordinator.put(this.descriptor, data.payload) : this.coordinator.discard(this.descriptor)
-        this.changed(null, this.coordinator.warning, true)
+        const ok = !oversized && (data.dirty ? this.coordinator.put(this.descriptor, data.payload) : this.coordinator.discard(this.descriptor))
+        this.changed(null, oversized
+          ? 'Draft recovery limit reached. Latest changes are not protected; copy your text before leaving. Any previous draft is unchanged.'
+          : this.coordinator.warning, true)
         this.port?.postMessage({ type: 'ack', nonce: this.nonce, generation, sequence: data.sequence, ok })
         if (Number.isSafeInteger(data.request)) {
           this.pending.get(data.request)?.(ok)
