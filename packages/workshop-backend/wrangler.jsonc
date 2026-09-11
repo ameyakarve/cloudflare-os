@@ -65,6 +65,11 @@
       // Read-only personal holdings bound to Paths to Points without an account flow.
       "tag": "v4",
       "new_sqlite_classes": [ "LedgerHoldingsGatekeeper" ]
+    },
+    {
+      // Private read-only Vault facet; no canonical storage namespace is added to Workshop.
+      "tag": "v5",
+      "new_sqlite_classes": [ "VaultReadGatekeeper" ]
     }
   ],
 

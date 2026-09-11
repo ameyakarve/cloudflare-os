@@ -1,6 +1,6 @@
 import type { SpecialistRecord } from '@gadgets/workshop-shared/specialists';
 import { parseSpecialists, specialistData, specialistOperation, SpecialistDispatcher, type SpecialistTools } from './specialists';
-import type { DeploymentLedgerApplication, LedgerEditorSession, LedgerHoldingsSession, LedgerApplicationQueue } from "@gadgets/workshop-shared/deployment-ledger";
+import type { DeploymentLedgerApplication, LedgerEditorSession, LedgerHoldingsSession, LedgerApplicationQueue, VaultReadSession } from "@gadgets/workshop-shared/deployment-ledger";
 import { boundedUsage, deploymentUsageEnabled, DeploymentUsageError, isDeploymentUsageError, UsageScope } from "./deployment-usage.js";
 import type { DeploymentUsage, DeploymentUsageRun, UsageGrant } from "@gadgets/workshop-shared/deployment-usage";
 import { deploymentIdentity } from "./deployment-identity.js";
@@ -262,6 +262,25 @@ export class LedgerEditorGatekeeper
   async removeObserver(_id: string): Promise<void> {}
 }
 
+/** Private read facet. The application service owns all domain behavior and canonical types. */
+export class VaultReadGatekeeper extends DurableObject<Cloudflare.Env, LedgerHoldingsGatekeeperProps>
+    implements Gatekeeper<VaultReadSession> {
+  async describe(): Promise<ResourceDescription> {
+    return {url: "https://milesvault.com/ledger/vault", title: "My Vault", snippet: "Bounded private account overview and activity.", suggestedBindingName: "VAULT", tsType: "VaultReadSession"};
+  }
+  getTypeScriptTypes() { return ledgerApplication(this.env).getVaultTypes(); }
+  async getAutoApprovableActions(): Promise<[]> { return []; }
+  async startSession(queue: NativeRpcStub<ApprovalQueue>): Promise<VaultReadSession> {
+    using scope = new NativeRpcStub(new LedgerApplicationQueueAdapter(queue));
+    return await ledgerApplication(this.env).openVault(this.ctx.props.ledgerKey, scope);
+  }
+  async applyAction(_action: number): Promise<void> { throw new Error("Read-only capability."); }
+  async rejectAction(_action: number): Promise<void> { throw new Error("Read-only capability."); }
+  async revertAction(_action: number): Promise<void> { throw new Error("Read-only capability."); }
+  async addObserver(_id: string, _user: Fetcher): Promise<void> { throw new Error("Private Vault cannot be shared."); }
+  async removeObserver(_id: string): Promise<void> {}
+}
+
 /** Stable persisted facet name; the deployment service owns the read-only holdings projection. */
 export class LedgerHoldingsGatekeeper
     extends DurableObject<Cloudflare.Env, LedgerHoldingsGatekeeperProps>
@@ -385,7 +404,7 @@ type GatekeeperRecord = {
   // lets their owning system output repair the binding idempotently without trusting a title or
   // URL supplied by some unrelated Gatekeeper.
   systemResource?: {
-    type: "ledger" | "ledgerHoldings";
+    type: "ledger" | "ledgerHoldings" | "vaultRead";
     identityKey: string;
   },
 
@@ -448,6 +467,8 @@ export type GadgetRecord = {
 
   /** Trusted deployment authority set during bundled system-output installation, never from blueprint metadata. */
   systemOutput?: "ledger";
+  /** Immutable deployment-owned read UI; never exported, shared or given editor authority. */
+  privateReadOutput?: boolean;
 
   /**
    * Name of the gadget to use in the workspace's default binding list for new chats. That is, when
@@ -2391,12 +2412,13 @@ class OverseerImpl implements AgentHooks {
 
   /** Reject workspace-level mutations of a deployment-managed singleton output. */
   assertWorkspaceMutable(): void {
+    if ([...this.storage.gadgets.list()].some(g => g.type === "gadget" && g.privateReadOutput)) throw new Error(MANAGED_SYSTEM_OUTPUT_ERROR_MESSAGE);
     if (this.managedSystemOutput()) throw new Error(MANAGED_SYSTEM_OUTPUT_ERROR_MESSAGE);
   }
 
   /** Reject source, binding, metadata, or lifecycle mutations of a managed gadget. */
   assertGadgetMutable(id: WorkpieceId): void {
-    if (this.storage.gadgets.get(id)?.type === "gadget" && this.getGadgetRecord(id).systemOutput) {
+    if (this.storage.gadgets.get(id)?.type === "gadget" && (this.getGadgetRecord(id).systemOutput || this.getGadgetRecord(id).privateReadOutput)) {
       throw new Error(MANAGED_SYSTEM_OUTPUT_ERROR_MESSAGE);
     }
   }
@@ -5379,6 +5401,7 @@ class OverseerImpl implements AgentHooks {
   async getGadgetExportFormats(gadgetId: WorkpieceId, chatId?: number)
       : Promise<GadgetExportFormat[]> {
     // Managed outputs use canonical application downloads, never authored exporter code.
+    if ([...this.storage.gadgets.list()].some(g => g.type === "gadget" && g.privateReadOutput)) return [];
     if (this.getGadgetRecord(gadgetId).systemOutput) return [];
     this.checkChatExistsAndMaterializeChanges(chatId);
     let resolved = await this.#resolveGadgetExportFormats(gadgetId, chatId);
@@ -5388,6 +5411,7 @@ class OverseerImpl implements AgentHooks {
 
   async exportGadget(gadgetId: WorkpieceId, formatId: string, chatId?: number)
       : Promise<ReadableStream<Uint8Array>> {
+    if ([...this.storage.gadgets.list()].some(g => g.type === "gadget" && g.privateReadOutput)) throw new Error("Private read outputs cannot be exported.");
     if (this.getGadgetRecord(gadgetId).systemOutput) {
       throw new Error("Managed outputs do not support generic Gadget exports.");
     }
@@ -10498,6 +10522,38 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     if (!this.impl.storage.prohibitAllSharing.get()) {
       this.impl.storage.prohibitAllSharing.put(true);
     }
+  }
+
+  /** Provision a new private read output only for its authenticated owner, never an observer. */
+  async configureVaultReadOutput(ownerId: string, ledgerKey: string, initialize = false): Promise<void> {
+    if (this.impl.ownerId !== ownerId) return;
+    const gadgets = [...this.impl.storage.gadgets.list()].filter((g): g is GadgetRecord => g.type === "gadget" && g.output?.id === "vault");
+    if (!gadgets.length) return;
+    if (gadgets.length !== 1) throw new Error("Private read output is ambiguous.");
+    const gadget = gadgets[0];
+    // Only the trusted blueprint creation path opts in. Never retrofit an old/authored Gadget
+    // merely because its caller-editable output metadata happens to say "vault".
+    if (!gadget.privateReadOutput && !initialize) return;
+    deploymentIdentity(ledgerKey);
+    const edge = gadget.bindings.VAULT;
+    let record = edge && this.impl.storage.gatekeepers.get(edge.target);
+    if (gadget.privateReadOutput && record?.systemResource?.type === "vaultRead" &&
+        record.systemResource.identityKey === ledgerKey && this.impl.storage.prohibitAllSharing.get()) return;
+    const makeClass = (): GatekeeperClass => this.impl.ctx.exports.VaultReadGatekeeper({props: {ledgerKey}});
+    if (!record || record.systemResource?.type !== "vaultRead") {
+      const id = this.impl.allocateWorkpieceId();
+      record = {id, class: makeClass(), resourceTitle: "My Vault", resourceUrl: "https://milesvault.com/ledger/vault", systemResource: {type: "vaultRead", identityKey: ledgerKey}};
+      this.impl.storage.gatekeepers.put(record);
+      gadget.bindings.VAULT = {target: id};
+    } else if (record.systemResource.identityKey !== ledgerKey) {
+      this.impl.ctx.facets.abort(`gatekeeper${record.id}`, new Error("Private read identity changed."));
+      record.class = makeClass(); record.systemResource.identityKey = ledgerKey;
+      this.impl.storage.gatekeepers.put(record);
+    }
+    gadget.privateReadOutput = true;
+    this.impl.storage.gadgets.put(gadget);
+    this.impl.storage.prohibitAllSharing.put(true);
+    this.impl.bumpVersion([gadget.id]);
   }
 
   /** Install or repair the authenticated, read-only LEDGER binding on Paths to Points. */

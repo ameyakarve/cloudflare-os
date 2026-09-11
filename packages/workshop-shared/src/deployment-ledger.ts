@@ -1,5 +1,6 @@
 import type { RpcTarget, RpcStub, WorkerEntrypoint } from "cloudflare:workers";
 import type { ObservationDescription } from "./gatekeeper.js";
+import type { VaultCanonicalApi } from "./os-vault.generated.js";
 
 /** One open account in the current user's MilesVault ledger. */
 export interface LedgerHoldingAccount {
@@ -51,6 +52,9 @@ export interface LedgerApplicationQueue extends RpcTarget {
   getUsageBudget(): Promise<import("./deployment-usage.js").DeploymentUsageRun | undefined>;
 }
 
+/** Read-only Vault capability, derived from the pinned canonical LedgerDO declaration. */
+export interface VaultReadSession extends RpcTarget, VaultCanonicalApi {}
+
 /** Private service for deployment-owned Ledger UI and read-only resources, never a vendor. */
 export interface DeploymentLedgerApplication extends WorkerEntrypoint {
   openBrowserEditor(storageKey: string, queue: RpcStub<LedgerApplicationQueue>): Promise<LedgerEditorSession>;
@@ -58,4 +62,8 @@ export interface DeploymentLedgerApplication extends WorkerEntrypoint {
   openHoldings(storageKey: string, queue: RpcStub<LedgerApplicationQueue>): Promise<LedgerHoldingsSession>;
   getEditorTypes(): Promise<string>;
   getHoldingsTypes(): Promise<string>;
+  /** Mint only with the ingress-proven exact storage key; no browser identity selector. */
+  openVault(storageKey: string, queue: RpcStub<LedgerApplicationQueue>): Promise<VaultReadSession>;
+  /** Canonical generated read declarations for the resource sandbox. */
+  getVaultTypes(): Promise<string>;
 }
