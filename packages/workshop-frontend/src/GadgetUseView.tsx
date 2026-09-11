@@ -112,6 +112,7 @@ export default function GadgetUseView({
           <GadgetExportMenu
             gadget={gadget}
             gadgetTitle={gadgets.find(g => g.id === selectedGadgetId)?.title ?? 'Gadget'}
+            systemOutput={gadgets.find(g => g.id === selectedGadgetId)?.systemOutput}
           />
           <span className="hidden md:inline-flex">
             <GadgetPresence

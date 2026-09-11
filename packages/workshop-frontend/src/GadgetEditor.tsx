@@ -1581,6 +1581,7 @@ export default function GadgetEditor() {
             <GadgetExportMenu
               gadget={selectedGadgetStub}
               gadgetTitle={selectedGadgetSummary?.title ?? 'Gadget'}
+              systemOutput={selectedGadgetSummary?.systemOutput}
               chatId={previewChatId}
             />
           </span>
@@ -1845,6 +1846,7 @@ export default function GadgetEditor() {
                 <GadgetExportMenu
                   gadget={selectedGadgetStub}
                   gadgetTitle={selectedGadgetSummary?.title ?? 'Gadget'}
+                  systemOutput={selectedGadgetSummary?.systemOutput}
                   chatId={previewChatId}
                 />
               )}

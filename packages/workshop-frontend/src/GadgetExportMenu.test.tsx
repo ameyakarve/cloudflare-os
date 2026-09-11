@@ -97,6 +97,23 @@ function button(label: string): HTMLButtonElement | undefined {
 }
 
 describe('GadgetExportMenu', () => {
+  it('replaces generic managed exports with a canonical user-click download', async () => {
+    const getExportFormats = vi.fn()
+    const exportFormat = vi.fn()
+    const client = gadget({ getExportFormats, export: exportFormat })
+    await act(async () => {
+      root.render(<GadgetExportMenu gadget={client} gadgetTitle="Renamed output" systemOutput="ledger" />)
+    })
+    expect(container.querySelector('button')).toBeNull()
+    const link = container.querySelector('a')!
+    expect(link.getAttribute('href')).toBe('/api/os/ledger/export')
+    expect(link.target).toBe('_blank')
+    expect(link.rel).toContain('noopener')
+    expect(getExportFormats).not.toHaveBeenCalled()
+    expect(exportFormat).not.toHaveBeenCalled()
+    expect(mocks.saveStreamToFile).not.toHaveBeenCalled()
+  })
+
   it('loads formats on open and exports the selected one with its metadata', async () => {
     const exportFormat = vi.fn<(
       id: string,

@@ -5367,7 +5367,8 @@ class OverseerImpl implements AgentHooks {
 
   async getGadgetExportFormats(gadgetId: WorkpieceId, chatId?: number)
       : Promise<GadgetExportFormat[]> {
-    if (this.getGadgetRecord(gadgetId).systemOutput) chatId = undefined;
+    // Managed outputs use canonical application downloads, never authored exporter code.
+    if (this.getGadgetRecord(gadgetId).systemOutput) return [];
     this.checkChatExistsAndMaterializeChanges(chatId);
     let resolved = await this.#resolveGadgetExportFormats(gadgetId, chatId);
     resolved.gadget?.[Symbol.dispose]();
@@ -5376,7 +5377,9 @@ class OverseerImpl implements AgentHooks {
 
   async exportGadget(gadgetId: WorkpieceId, formatId: string, chatId?: number)
       : Promise<ReadableStream<Uint8Array>> {
-    if (this.getGadgetRecord(gadgetId).systemOutput) chatId = undefined;
+    if (this.getGadgetRecord(gadgetId).systemOutput) {
+      throw new Error("Managed outputs do not support generic Gadget exports.");
+    }
     this.checkChatExistsAndMaterializeChanges(chatId);
     let {formats, handler, gadget} = await this.#resolveGadgetExportFormats(gadgetId, chatId);
     if (!gadget) throw new Error("The Gadget server stub is unavailable.");

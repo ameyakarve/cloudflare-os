@@ -11,9 +11,19 @@ type Props = {
   gadget: RpcStub<GadgetClient> | null
   gadgetTitle: string
   chatId?: number
+  /** Trusted workspace metadata; never inferred from title or authored source. */
+  systemOutput?: 'ledger'
 }
 
-export default function GadgetExportMenu({ gadget, gadgetTitle, chatId }: Props) {
+export default function GadgetExportMenu(props: Props) {
+  if (props.systemOutput === 'ledger') {
+    return <a href="/api/os/ledger/export" target="_blank" rel="noopener noreferrer"
+      className="text-sm text-kumo-default hover:underline">Download saved journal</a>
+  }
+  return <GenericGadgetExportMenu {...props} />
+}
+
+function GenericGadgetExportMenu({ gadget, gadgetTitle, chatId }: Props) {
   const [formats, setFormats] = useState<GadgetExportFormat[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
