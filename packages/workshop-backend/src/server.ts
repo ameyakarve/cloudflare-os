@@ -125,6 +125,10 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     return admins.includes(name);
   }
 
+  async getRecoveryPrincipal(): Promise<string> {
+    return this.#userId.toString();
+  }
+
   whoami(): Promise<AiChatAuthorInfo> {
     // Pure-read delegations retry once across a user-DO reset (see retryOnDoReset); writes never do.
     return retryOnDoReset(() => this.#user.whoami());

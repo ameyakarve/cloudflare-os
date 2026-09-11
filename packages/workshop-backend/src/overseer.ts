@@ -5365,6 +5365,17 @@ class OverseerImpl implements AgentHooks {
     return jsCode !== undefined ? {jsCode: withGadgetKumo(jsCode)} : null;
   }
 
+  /** Recovery scope is owner-only and comes from the canonical system binding, not UI code. */
+  getManagedDraftDescriptor(gadgetId: WorkpieceId, clientUserId: string): UiBundle['managedDraft'] {
+    const record = this.getGadgetRecord(gadgetId);
+    const edge = record.bindings.LEDGER;
+    const resource = edge && this.storage.gatekeepers.get(edge.target);
+    if (clientUserId !== this.ownerId || record.systemOutput !== "ledger" ||
+        resource?.systemResource?.type !== "ledger") return undefined;
+    return {principalId: clientUserId, workspaceId: this.ctx.id.toString(),
+      outputId: String(gadgetId), protocol: 1};
+  }
+
   async getGadgetExportFormats(gadgetId: WorkpieceId, chatId?: number)
       : Promise<GadgetExportFormat[]> {
     // Managed outputs use canonical application downloads, never authored exporter code.
@@ -13301,7 +13312,10 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
   }
 
   async getUiBundle(chatId?: number): Promise<UiBundle | null> {
-    return this.impl.getGadgetUiBundle(this.id, chatId);
+    const bundle = await this.impl.getGadgetUiBundle(this.id, chatId);
+    // Negotiation reports compatibility only; it cannot add any RPC authority.
+    if (bundle) bundle.managedDraft = this.impl.getManagedDraftDescriptor(this.id, this.clientUserId);
+    return bundle;
   }
 
   async connectToGadget(chatId?: number): Promise<RpcStub<any>> {

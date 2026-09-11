@@ -361,6 +361,9 @@ export interface AuthenticatedApi extends RpcTarget {
   /** Get profile info for the user who is logged in. */
   whoami(): Promise<AiChatAuthorInfo>;
 
+  /** Opaque authenticated principal for host-owned private recovery namespaces, not a display ID. */
+  getRecoveryPrincipal(): Promise<string>;
+
   /** Set the user's own display name, seen in chats, etc. */
   setOwnDisplayName(name: string): Promise<void>;
 
@@ -1460,10 +1463,21 @@ export type OutputSummary = {
 }
 
 /**
- * Describes the client-side UI code for a Gadget. Such code is intended to run inside an iframe
- * sandbox with no access to the outside world except through an RPC interface to the Workshop
- * and to the Gadget's server.
+ * Server-attested recovery namespace for an owner's canonical managed output. This is not a
+ * capability and is never accepted from a sandbox; protocol support is negotiated separately.
  */
+export type ManagedDraftDescriptor = {
+  /** Opaque authenticated owner ID; never an email or frame assertion. */
+  principalId: string;
+  /** Server-owned workspace identity. */
+  workspaceId: string;
+  /** Server-owned canonical output identity. */
+  outputId: string;
+  /** Maximum protocol available for bounded frame negotiation; not proof of client support. */
+  protocol: 1;
+};
+
+/** Sandboxed code and optional server-attested recovery scope. */
 export type UiBundle = {
   // URL from which the main bundle of UI code can be downloaded. This download contains all the
   // Gadget's client-side assets. The URL is content-addressed to make it highly cacheable, even
@@ -1481,6 +1495,9 @@ export type UiBundle = {
    *   Cache API in the browser? Or some other local storage?
    */
   jsCode: string;
+
+  /** Owner-only canonical managed output scope. Frame negotiation cannot mint this descriptor. */
+  managedDraft?: ManagedDraftDescriptor;
 
   // Other metadata could be placed here in the future, e.g. to specify what version of support
   // libraries should be loaded.
