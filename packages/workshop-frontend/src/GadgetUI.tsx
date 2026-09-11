@@ -310,6 +310,7 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
         if (cancelled) return
         draftSessionRef.current?.dispose()
         draftSessionRef.current = null
+        resetConnection(new Error('Gadget code changed.'))
         setIsInvalidated(true)
       })()
       return () => { cancelled = true }
@@ -352,6 +353,9 @@ function GadgetUISession({ gadget, height, reloadTrigger, dataReloadTrigger, isV
           descriptorRef.current = bundle.managedDraft ?? null
           setManaged(!!bundle.managedDraft)
           const html = createSandboxedHtml(bundle.jsCode, resolvedThemeModeRef.current)
+          // React may batch loading=true/false for an immediately resolved bundle. Explicitly
+          // replace the document even when the resulting code string is byte-identical.
+          if (isInvalidated) setIframeGeneration(value => value + 1)
           setSandboxedHtml(html)
         } else {
           setSandboxedHtml(null)
