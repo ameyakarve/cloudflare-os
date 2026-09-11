@@ -78,7 +78,7 @@ const advance = async ms=>{tick+=ms;for(const [id,t] of timers) if(t.at<=tick){t
 function table(key, rows=[]) {const data=new Map(rows.map(x=>[x[key],structuredClone(x)]));return {
  get:id=>data.has(id)?structuredClone(data.get(id)):undefined,
  put:x=>data.set(x[key],structuredClone(x)), delete:id=>data.delete(id), list:()=>[...data.values()].map(x=>structuredClone(x))};}
-function store() {return {activeAgents:table('chatId',[{executionId:'old-execution',chatId:7,initiatorUserId:'synthetic-user',modelId:'fixture',initiator:{id:'fixture'},callbackInitiated:false}]),
+function store() {return {agentContinuations:table('chatId'),activeAgents:table('chatId',[{executionId:'old-execution',chatId:7,initiatorUserId:'synthetic-user',modelId:'fixture',initiator:{id:'fixture'},callbackInitiated:false}]),
  chatMeta:table('id',[{id:7,activeAgent:{id:'fixture'}}]), specialistRecords:{get(){},byRoot:{list:()=>[]}},chats:{list:()=>[]}};}
 function reopen(storage) {const fresh=new OverseerImpl(storage);fresh.recover();return fresh;}
 async function stalled() {

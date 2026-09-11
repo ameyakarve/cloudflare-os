@@ -778,6 +778,8 @@ type ChatAttachmentContentRecord = {
 const BUILTIN_TOOL_GATEKEEPER_ID = -1;
 
 export type ActionRecord = {
+  /** Captured by the creating queue, never inferred at decision time. */
+  continuationId?: string;
   id: number,
   gatekeeperId: WorkpieceId;
   caller: GatekeeperCaller;
@@ -1468,7 +1470,11 @@ export function makeOverseerStorage(storage: DurableObjectStorage) {
         primaryKey: "externalChatKey",
       }),
 
-      chats: collection<AiChatMessage>()({
+      // Survives normal cleanup; Stop revokes it even without an active row.
+      agentContinuations: collection<{chatId: number; id: string}>()({
+        primaryKey: "chatId",
+      }),
+      chats: collection<AiChatMessage & {continuationId?: string}>()({
         primaryKey(msg: AiChatMessage) {
           return `${keyString(msg.chatId)}.${keyString(msg.sequence)}`;
         },
@@ -2172,6 +2178,9 @@ class OverseerImpl implements AgentHooks {
       // Do not resolve models or usage for stopped work. Retain accounting evidence;
       // the metadata sweep below makes the chat idle without replaying it.
       if (record.stopRequested) continue;
+      // Recovery owns this execution, not any historical pending request. Only newly created
+      // requests receive its generation; legacy action/connection records stay fail-closed.
+      this.storage.agentContinuations.put({chatId: record.chatId, id: record.executionId});
       // Register the running agent immediately (see above), and create the LiveChatContext
       // synchronously, so that cancellations are immediately respected.
       this.#registerRunningAgent(record.chatId);
@@ -6129,8 +6138,12 @@ class OverseerImpl implements AgentHooks {
   }
 
   async submitAction(gatekeeperId: number, action: number,
-                     description: ActionDescription, caller: GatekeeperCaller, usageScope?: UsageScope)
+                     description: ActionDescription, caller: GatekeeperCaller, usageScope?: UsageScope,
+                     continuationId?: string)
       : Promise<void> {
+    // Specialists are bounded child loops, not startAgent continuations. Preserve their
+    // canonical pending-approval outcome without granting any later inference authority.
+    const child = caller.from === "agent" ? this.#specialistChildren.get(caller.chatId) : undefined;
     await this.checkDeploymentAccess();
     await this.chargeUsage(caller, {capabilityCalls: 1, pendingWrites: 1}, usageScope);
     let gatekeeper = this.storage.gatekeepers.get(gatekeeperId);
@@ -6160,6 +6173,7 @@ class OverseerImpl implements AgentHooks {
       resourceTitle: gatekeeper?.resourceTitle,
       resourceUrl: gatekeeper?.resourceUrl,
       action,
+      continuationId,
       createdAt: new Date(),
       state: "pending",
       type: "action",
@@ -6175,7 +6189,11 @@ class OverseerImpl implements AgentHooks {
       }
       this.storage.actions.put(record);
     });
-    this.#associateAction(caller, actionId);
+    const ownsTurn = caller.from !== "agent" ||
+      this.canContinueAgent(caller.chatId, continuationId) ||
+      (child !== undefined && this.#specialistChildren.get(caller.chatId) === child &&
+        !child.root.cancelController.signal.aborted);
+    if (ownsTurn) this.#associateAction(caller, actionId);
 
     // Same auto-approval gate as before, named because awaitDecision uses it too. The drain is
     // deferred because applying calls back into the gatekeeper facet still awaiting submitAction.
@@ -6184,7 +6202,7 @@ class OverseerImpl implements AgentHooks {
 
     // Only agent turns suspend on awaitDecision, and only when a manual decision is pending.
     // Auto-approved actions keep the seamless behavior the user opted into.
-    if (caller.from === "agent" && description.awaitDecision && !willAutoApprove) {
+    if (ownsTurn && caller.from === "agent" && description.awaitDecision && !willAutoApprove) {
       this.#getOrCreateCapturedActions(caller.chatId).awaitDecision = true;
     }
 
@@ -7148,6 +7166,7 @@ class OverseerImpl implements AgentHooks {
     if (rootChatId !== undefined && rootChatId !== chatId && this.#liveChats.get(rootChatId) === childRoot) {
       return this.cancelAgent(rootChatId);
     }
+    this.storage.agentContinuations.delete(chatId);
     const record = this.storage.activeAgents.get(chatId);
     const liveChat = this.#liveChats.get(chatId);
     if (record) {
@@ -7164,8 +7183,9 @@ class OverseerImpl implements AgentHooks {
       for (const cb of liveChat.activeAgentCallbacks.values()) cb.reject(error);
       liveChat.activeAgentCallbacks.clear();
     }
-    if (record && !liveChat) {
-      // There is no finalizer to make this orphan idle. Keep the stopped row, not a spinner.
+    if (!liveChat) {
+      // There is no finalizer to make this orphan/suspended chat idle. Keep any stopped row,
+      // but don't leave an orphan spinner when no active row survived either.
       const meta = this.storage.chatMeta.get(chatId);
       if (meta) { delete meta.activeAgent; this.storage.chatMeta.put(meta); }
       this.#unregisterRunningAgent(chatId);
@@ -7330,6 +7350,13 @@ class OverseerImpl implements AgentHooks {
     }
   }
 
+  /** Check durable automatic-continuation ownership; legacy requests fail closed. */
+  canContinueAgent(chatId: number, id: string | undefined): boolean {
+    const active = this.storage.activeAgents.get(chatId);
+    return id !== undefined && this.storage.agentContinuations.get(chatId)?.id === id &&
+      (!active || (active.executionId === id && !active.stopRequested));
+  }
+
   // Start an agent turn for the given chat (fire-and-forget). Persists an `ActiveAgentRecord` so
   // the turn can be resumed after a server restart, and tracks the turn so the keep-alive alarm is
   // held while it runs. `initiatorUserId` is the hex DO ID of the user whose model/account is used,
@@ -7337,7 +7364,11 @@ class OverseerImpl implements AgentHooks {
   startAgent(chatId: number, aiModel: UserAiModelRecord,
              initiator: AiChatAuthorInfo, initiatorUserId: string,
              callbackInitiated: boolean = false,
-             keepAlive: boolean = false): void {
+             keepAlive: boolean = false,
+             continuation?: {id: string | undefined}): void {
+    // Send/Retry authorize a new turn; automatic decisions must supply their captured owner.
+    // The object distinguishes a legacy (missing-id) continuation from new-turn authority.
+    if (continuation && !this.canContinueAgent(chatId, continuation.id)) return;
     // Register before starting the turn so registration always precedes the turn's teardown
     // (`#unregisterRunningAgent`, in `#runAgentTurn`'s finally).
     const previous = this.storage.activeAgents.get(chatId);
@@ -7346,6 +7377,7 @@ class OverseerImpl implements AgentHooks {
     }
     this.#registerRunningAgent(chatId);
     const executionId = crypto.randomUUID();
+    this.storage.agentContinuations.put({chatId, id: executionId});
     this.storage.activeAgents.put({
       chatId,
       executionId,
@@ -9623,6 +9655,7 @@ class OverseerImpl implements AgentHooks {
     reason: string;
     bindingName: string;
   }): Promise<{ requested: boolean; message: string }> {
+    const continuationId = this.storage.agentContinuations.get(chatId)?.id;
     // The agent loop already validated the binding name against the chat's scope; re-validate
     // its shape here defensively (this is the boundary that persists it).
     validateBindingName(input.bindingName);
@@ -9636,6 +9669,10 @@ class OverseerImpl implements AgentHooks {
           `Available vendors: ${vendors.map(v => v.id).join(", ") || "(none)"}.` };
     }
 
+    if (!this.canContinueAgent(chatId, continuationId)) {
+      return {requested: false, message: "The requesting agent execution is no longer current."};
+    }
+
     // Resolve the exact resource this request maps to, using the same precedence the accept modal
     // uses. If it can't be resolved, REJECT the request: otherwise the user would get an accept
     // card that opens a blank "create new connection" picker. The agent is told what to fix.
@@ -9646,8 +9683,9 @@ class OverseerImpl implements AgentHooks {
     }
 
     let requestId = `${chatId}:${crypto.randomUUID()}`;
-    let body: AiChatMessageBody = {
+    let body: AiChatMessageBody & {continuationId?: string} = {
       type: "connectionRequest",
+      continuationId,
       requestId,
       vendorId: input.vendorId,
       vendorName: vendor.description.displayName,
@@ -12097,7 +12135,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     // If this was an awaited agent action, resume only after all awaited actions in the turn are
     // approved. If applyPendingAction throws, the action stays pending and the turn stays suspended.
     if (action.caller.from === "agent" && action.description.awaitDecision) {
-      await this.#maybeResumeAfterActionDecision(action.caller.chatId);
+      await this.#maybeResumeAfterActionDecision(action.caller.chatId, action.continuationId);
     }
 
     // Clearing this manual gate may unblock later auto-eligible pending actions on the same
@@ -12181,7 +12219,8 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   // Resume a turn suspended on awaitDecision once all awaited actions from that turn are approved.
   // Scoping to the current turn prevents older rejected actions from blocking future resumes.
-  async #maybeResumeAfterActionDecision(chatId: number): Promise<void> {
+  async #maybeResumeAfterActionDecision(chatId: number, continuationId?: string): Promise<void> {
+    if (!this.impl.canContinueAgent(chatId, continuationId)) return;
     let awaited: (ActionRecord & {type: "action"})[] = [];
     for (let msg of this.impl.storage.chats.list(
         {prefix: `${keyString(chatId)}.`, reverse: true})) {
@@ -12203,6 +12242,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     awaited.reverse();  // Present titles chronologically.
 
     // Only resume when every awaited action in the turn has been decided and all were approved.
+    if (awaited.some(r => r.continuationId !== continuationId)) return;
     if (awaited.length === 0) return;                       // No awaited action in current turn.
     if (awaited.some(r => r.state === "pending")) return;   // Still waiting on a decision.
     if (awaited.some(r => r.state === "rejected")) return;  // Denial leaves the turn ended.
@@ -12215,9 +12255,10 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
         `The changes you submitted have been approved and applied: ${titleList}. ` +
         `Reads now reflect them.`;
     let author = await this.#getClientProfile();
+    if (!this.impl.canContinueAgent(chatId, continuationId)) return;
     this.impl.addChatMessages(chatId, author, [{type: "message", message: summary}]);
 
-    await this.#resumeSuspendedAgent(chatId);
+    await this.#resumeSuspendedAgent(chatId, continuationId);
   }
 
   async rejectAction(id: number): Promise<void> {
@@ -12332,7 +12373,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   // Find a pending connectionRequest message by id. The request id encodes the chat id as a prefix
   // (`${chatId}:...`) so we only scan that thread's messages.
-  #findConnectionRequest(requestId: string): AiChatMessage & {type: "connectionRequest"} {
+  #findConnectionRequest(requestId: string): AiChatMessage & {type: "connectionRequest"; continuationId?: string} {
     let colonIdx = requestId.indexOf(":");
     if (colonIdx < 0) throw new Error(`Malformed connection request id: ${requestId}`);
     let chatId = Number(requestId.slice(0, colonIdx));
@@ -12340,7 +12381,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
     for (let msg of this.impl.storage.chats.list({prefix: `${keyString(chatId)}.`})) {
       if (msg.type === "connectionRequest" && msg.requestId === requestId) {
-        return msg as AiChatMessage & {type: "connectionRequest"};
+        return msg;
       }
     }
     throw new Error(`No such connection request: ${requestId}`);
@@ -12348,8 +12389,10 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
   // Restart a suspended agent turn after its outcome is recorded in chat history (accepted
   // connection, or all awaited actions approved). Denials intentionally don't call this.
-  async #resumeSuspendedAgent(chatId: number): Promise<void> {
+  async #resumeSuspendedAgent(chatId: number, continuationId?: string): Promise<void> {
+    if (!this.impl.canContinueAgent(chatId, continuationId)) return;
     await this.impl.waitForChatMessagePreparation(chatId);
+    if (!this.impl.canContinueAgent(chatId, continuationId)) return;
     // Canonical action approval is not permission for fresh model dispatch or a new budget.
     if (this.impl.getChatAgentContext(chatId).specialist) return;
     let meta = this.impl.storage.chatMeta.get(chatId);
@@ -12368,25 +12411,26 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
     let userMeta = await retryOnDoReset(
         () => this.#clientUser.getChatContext(modelId), this.impl.logger);
+    if (!this.impl.canContinueAgent(chatId, continuationId)) return;
     if (!userMeta.aiModel) return;  // No model resolved; nothing to resume.
 
     let preparation = this.impl.waitForChatMessagePreparation(chatId);
     if (preparation) {
       await preparation;
-      return this.#resumeSuspendedAgent(chatId);
+      return this.#resumeSuspendedAgent(chatId, continuationId);
     }
 
     // Re-read after the await: another concurrent accept may have started the agent in the
     // meantime. Avoid starting a second agent loop for the same chat.
     let fresh = this.impl.storage.chatMeta.get(chatId);
-    if (!fresh || fresh.activeAgent) return;
+    if (!fresh || fresh.activeAgent || !this.impl.canContinueAgent(chatId, continuationId)) return;
 
     fresh.activeAgent = userMeta.aiModel.profile;
     fresh.lastActive = this.impl.getChatTimestamp();
     this.impl.storage.chatMeta.put(fresh);
 
     this.impl.startAgent(chatId, userMeta.aiModel, userMeta.profile,
-                         this.#clientUser.id.toString());
+                         this.#clientUser.id.toString(), false, false, {id: continuationId});
   }
 
   async acceptConnectionRequest(
@@ -12409,14 +12453,15 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     // first bounds the lookup to the current turn and usually finds a pending sibling immediately.
     for (let sibling of this.impl.storage.chats.list(
         {prefix: `${keyString(msg.chatId)}.`, reverse: true})) {
-      if (sibling.type === "connectionRequest" && sibling.state !== "accepted") return;
+      if (sibling.type === "connectionRequest" &&
+          (sibling.state !== "accepted" || sibling.continuationId !== msg.continuationId)) return;
       if (sibling.type === "agentCallback" ||
           (sibling.type === "message" &&
            (sibling.author.type === "user" || sibling.author.type === "gadget"))) {
         break;
       }
     }
-    await this.#resumeSuspendedAgent(msg.chatId);
+    await this.#resumeSuspendedAgent(msg.chatId, msg.continuationId);
   }
 
   async denyConnectionRequest(requestId: string): Promise<void> {
@@ -12834,6 +12879,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
     // below also clears this via the tracked promise's finally, but the chat may have no live
     // agent in memory, e.g. after a restart before resumption ran.)
     this.impl.storage.activeAgents.delete(chatId);
+    this.impl.storage.agentContinuations.delete(chatId);
 
     // Clean up all in-memory live state for this chat.
     this.impl.destroyLiveChat(chatId);
@@ -13810,12 +13856,15 @@ class GatekeeperClientImpl<Session extends RpcCompatible<Session>>
   // See GadgetClientImpl: `joinedAs` counts a collaborator's retained capability toward
   // #hasCollaboratorSession; omitted for the owner's and for internal construction.
   #leaveSession?: () => void;
+  #continuationId?: string;
 
   constructor(private impl: OverseerImpl, private id: number,
       private facet: Fetcher<Gatekeeper<Session>>,
       private caller: GatekeeperCaller = {from: "user"},
       joinedAs?: SessionKind) {
     super();
+    this.#continuationId = caller.from === "agent"
+      ? impl.storage.agentContinuations.get(caller.chatId)?.id : undefined;
     if (joinedAs) this.#leaveSession = impl.joinSession(joinedAs);
   }
 
@@ -13866,7 +13915,8 @@ class GatekeeperClientImpl<Session extends RpcCompatible<Session>>
     // is refused (see #gatekeepersPendingRestart).
     this.impl.assertGatekeeperUsable(this.id);
     // @ts-expect-error TODO: Remove annotation when Cap'n Web fixes cyclic type issues
-    return this.facet.startSession(new ApprovalQueueImpl(this.impl, this.id, this.caller));
+    return this.facet.startSession(new ApprovalQueueImpl(this.impl, this.id, this.caller,
+        undefined, undefined, undefined, this.#continuationId));
   }
 
   async getCreationSpec(): Promise<GatekeeperCreationSpec> {
@@ -13960,6 +14010,7 @@ function makeHookFiringCallback(impl: OverseerImpl, hookId: number, budget?: Usa
 
 @validateRpc()
 class ApprovalQueueImpl extends RpcTarget implements ApprovalQueue {
+  #continuationId?: string;
   // `hookId` is set only on the queue startHook returns with each firing: that queue is held by
   // the gatekeeper across awaits (even other DOs), so like the firing's callback it revalidates
   // the hook per call -- otherwise a firing raced by a disable/delete could keep authorizing
@@ -13968,8 +14019,10 @@ class ApprovalQueueImpl extends RpcTarget implements ApprovalQueue {
   // facet's in-DO lifetime, which the session chokepoints already gate.
   constructor(private impl: OverseerImpl, private gatekeeperId: number,
               private caller: GatekeeperCaller, private hookId?: number,
-              private usageScope?: UsageScope, private releaseUsage?: () => void) {
+              private usageScope?: UsageScope, private releaseUsage?: () => void,
+              continuationId?: string) {
     super();
+    this.#continuationId = continuationId;
   }
 
   authorizeObservation(description: ObservationDescription): Promise<void> {
@@ -13995,7 +14048,8 @@ class ApprovalQueueImpl extends RpcTarget implements ApprovalQueue {
 
   submitAction(action: number, description: ActionDescription): Promise<void> {
     if (this.hookId !== undefined) requireLiveHook(this.impl, this.hookId);
-    return this.impl.submitAction(this.gatekeeperId, action, description, this.caller, this.usageScope);
+    return this.impl.submitAction(this.gatekeeperId, action, description, this.caller,
+        this.usageScope, this.#continuationId);
   }
 
   async bindHook<Hook extends RpcTarget>(
