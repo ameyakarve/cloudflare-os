@@ -101,8 +101,8 @@ function button(label: string): HTMLButtonElement | undefined {
 describe('GadgetExportMenu', () => {
   it('replaces generic managed exports with a deployment-owned user-click download', async () => {
     vi.stubEnv('VITE_MANAGED_LEDGER_EXPORT_PATH', '/deployment/saved-journal')
-    const getExportFormats = vi.fn()
-    const exportFormat = vi.fn()
+    const getExportFormats = vi.fn<GadgetClient['getExportFormats']>()
+    const exportFormat = vi.fn<GadgetClient['export']>()
     const client = gadget({ getExportFormats, export: exportFormat })
     await act(async () => {
       root.render(<GadgetExportMenu gadget={client} gadgetTitle="Renamed output" systemOutput="ledger" />)
@@ -125,8 +125,8 @@ describe('GadgetExportMenu', () => {
     '/export?user=other', '/export#fragment', '/export\n', ' /export',
   ])('hides managed download without a safe configured path: %s', async path => {
     vi.stubEnv('VITE_MANAGED_LEDGER_EXPORT_PATH', path)
-    const getExportFormats = vi.fn()
-    const exportFormat = vi.fn()
+    const getExportFormats = vi.fn<GadgetClient['getExportFormats']>()
+    const exportFormat = vi.fn<GadgetClient['export']>()
     await act(async () => {
       root.render(<GadgetExportMenu gadget={gadget({ getExportFormats, export: exportFormat })}
         gadgetTitle="Saved journal" systemOutput="ledger" />)
