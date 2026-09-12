@@ -1,3 +1,8 @@
+/** Private frozen snapshot transport and validation; not exposed on AuthenticatedApi. */
+export { encodeDeploymentInstallSnapshot, validateDeploymentInstallSnapshot } from './deployment-install-snapshot.js';
+/** Private frozen snapshot DTOs. */
+export type { DeploymentInstallSnapshot, DeploymentInstallSnapshotEnvelope } from './deployment-install-snapshot.js';
+
 /** Bounded deployment-owned text and executable identity, never catalog/user-authored metadata. */
 export interface DeploymentInstallRelease {
   /** Immutable release identity. A changed artifact needs a new identity. */

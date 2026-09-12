@@ -10,6 +10,8 @@ export interface DoctorReadSession extends RpcTarget, DoctorCanonicalReadApi {}
 export interface DeploymentDoctorApplication extends WorkerEntrypoint, DoctorControlFactory {
   /** Mint an exact-owner read capability; never a browser-supplied identity. */
   openDoctor(storageKey: string, queue: RpcStub<LedgerApplicationQueue>): Promise<DoctorReadSession>;
+  /** Exact frozen private snapshot. Reject other descriptor digests; never select latest/catalog bytes. */
+  getDeploymentInstallSnapshot(releaseDigest: string): Promise<import('./deployment-install.js').DeploymentInstallSnapshotEnvelope>;
   /** Sandbox declarations derived from the single shared canonical artifact. */
   getDoctorTypes(): Promise<string>;
 }
