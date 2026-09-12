@@ -51,9 +51,11 @@ export default defineConfig({
               constructor(key, save, queue) { super(); this.#key = key; this.#save = save; this.#queue = queue.dup(); }
               async listEntries() {
                 using budget = await this.#queue.getUsageBudget();
-                if (budget) await budget.getGrant();
-                await this.#queue.authorizeObservation({title: "Fixture read", description: "No canonical data"});
-                return {rows: [{kind: "note", id: 1, raw_text: this.#key, updated_at: 1}]};
+                try {
+                  if (budget) await budget.getGrant();
+                  await this.#queue.authorizeObservation({title: "Fixture read", description: "No canonical data"});
+                  return {rows: [{kind: "note", id: 1, raw_text: this.#key, updated_at: 1}]};
+                } finally { if (budget) await budget.finish(); }
               }
               async completionData() { return {ledgerAccounts: [], catalogueAccounts: []}; }
               async replaceBuffer() { if (!this.#save) throw new Error("Browser Save only"); return {savedBy: this.#key}; }

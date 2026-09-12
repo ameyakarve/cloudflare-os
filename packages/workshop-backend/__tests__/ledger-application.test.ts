@@ -3,6 +3,7 @@ import {runInDurableObject} from 'cloudflare:test';
 import {expect, it} from 'vitest';
 import type {ApprovalQueue, GitCache} from '@gadgets/workshop-shared/gatekeeper';
 import type {LedgerEditorGatekeeper, LedgerHoldingsGatekeeper} from '../src/overseer';
+import {ledgerUsageFixture} from './ledger-usage-fixture';
 
 class Queue extends RpcTarget implements ApprovalQueue {
   reads = 0;
@@ -36,11 +37,10 @@ it('uses the browser-only factory for trusted managed output metadata', async ()
   const user = env.TEST_USER.getByName(crypto.randomUUID());
   await user.authenticateFromCfAccess('member@example.com', true);
   await user.bindDeploymentIdentity({subject: 'member@example.com', storageKey: 'Member@example.com'});
+  const usage = ledgerUsageFixture('Member@example.com', user.id.toString());
   await runInDurableObject(user, instance => {
-    Object.assign(instance['env'], {DEPLOYMENT_USAGE_POLICY: {
-      async beginRun(_key: string, runId: string) { return {allowed: true, runId, expiresAt: Date.now() + 10_000}; },
-      async reserve() { return {allowed: true}; }, async finishRun() {}, async settleTokens() {},
-    }});
+    Object.assign(instance['env'], {DEPLOYMENT_USAGE_V2_ROUTE: 'DEPLOYMENT_USAGE_V2_ROUTE_ledgerFixture',
+      DEPLOYMENT_USAGE_V2_ROUTE_ledgerFixture: usage.policy});
   });
   try { await runInDurableObject(env.TEST_OVERSEER.getByName(crypto.randomUUID()), async (instance, ctx) => {
     const impl = instance['impl'];
@@ -60,5 +60,13 @@ it('uses the browser-only factory for trusted managed output metadata', async ()
     impl.storage.gatekeepers.delete(4);
     await expect(impl.getGadgetUiSession(3)).rejects.toThrow('UI binding is unavailable');
     } finally { instance['env'].DEPLOYMENT_USAGE_REQUIRED = required; }
-  }); } finally { await runInDurableObject(user, instance => { delete instance['env'].DEPLOYMENT_USAGE_POLICY; }); }
+  });
+    // The fixture reads the forwarded budget, then authorizeObservation charges its own
+    // ordinary-operation run. Both exact paired acquisitions must be closed.
+    expect(usage.events).toEqual(['begin', 'activate', 'begin', 'activate', 'reserve', 'cancel', 'cancel']);
+    usage.assertDrained();
+  } finally { await runInDurableObject(user, instance => {
+    delete instance['env'].DEPLOYMENT_USAGE_V2_ROUTE;
+    delete instance['env'].DEPLOYMENT_USAGE_V2_ROUTE_ledgerFixture;
+  }); }
 }, 15_000);
