@@ -22,6 +22,9 @@ async function scenario(run: (context: {
   changeRelease: (next: DeploymentInstallRelease) => void;
   revoke: () => void;
   pauseRelease: () => {entered: Promise<void>; resume: () => void};
+  pauseAccess: (skip?: number) => {entered: Promise<void>; resume: () => void};
+  identity: (userId: string, mode: 'reset' | 'rebind' | 'remove' | 'aba') => Promise<void>;
+  checkEffects: (userId: string) => Promise<void>;
   expireAttempt: (userId: string) => Promise<void>;
 }) => Promise<void>) {
   const anchor = env.TEST_OVERSEER.getByName(crypto.randomUUID());
@@ -30,6 +33,7 @@ async function scenario(run: (context: {
     let descriptor = release;
     let allowed = true;
     let releasePause: (() => Promise<void>) | undefined;
+    let accessPause: (() => Promise<void>) | undefined;
     const context = Object.assign(createExecutionContext(), {
       exports: ctx.exports, waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise),
     });
@@ -37,8 +41,14 @@ async function scenario(run: (context: {
     // Binding fixtures are data/role authorities, not installer or approval implementations.
     Object.assign(testEnv, {
       MILESVAULT_DOCTOR_APP: {getDeploymentInstallRelease: async () => {await releasePause?.(); return descriptor;}},
-      DEPLOYMENT_ACCESS_POLICY: {checkAccess: async () => allowed
-        ? {allowed: true, validUntil: Date.now() + 60_000} : {allowed: false, reason: 'denied'}},
+      DEPLOYMENT_ACCESS_POLICY: {checkAccess: async () => {
+        // Capture an affirmative response BEFORE pausing, as a stale in-flight policy reply.
+        const result = allowed ? {allowed: true, validUntil: Date.now() + 60_000}
+          : {allowed: false, reason: 'denied'};
+        await accessPause?.();
+        return result;
+      }},
+      DEPLOYMENT_USAGE_POLICY: new Proxy({}, {get: () => {throw new Error('Unexpected usage authority');}}),
     });
     const suffix = crypto.randomUUID();
     const root = new PublicApiImpl(context, testEnv, reason => abort.abort(reason),
@@ -46,6 +56,39 @@ async function scenario(run: (context: {
     const other = new PublicApiImpl(context, testEnv, () => {},
       {email: `b-${suffix}@example.com`, externalIdentityKey: `B-${suffix}@example.com`});
     await run({root, other, abort, changeRelease: next => {descriptor = next;}, revoke: () => {allowed = false;},
+      identity: async (userId, mode) => {
+        const user = ctx.exports.UserDurableObject.get(ctx.exports.UserDurableObject.idFromString(userId));
+        await runInDurableObject(user, async (u, c) => {
+          const identity = u['storage'].deploymentIdentity.get()!;
+          if (mode === 'reset') {
+            // Supported native storage reset and real ingress binding, not a forged epoch/slot.
+            await c.storage.deleteAll();
+            await u.authenticateFromCfAccess(identity.subject, true);
+            await u.bindDeploymentIdentity(identity);
+          } else if (mode === 'rebind') {
+            await u.bindDeploymentIdentity({storageKey: identity.storageKey, subject: identity.subject});
+          } else {
+            // Separate fault coverage for retained-slot ABA; rebind rotates the real User epoch.
+            u['storage'].deploymentIdentity.put(null);
+            if (mode === 'aba') await u.bindDeploymentIdentity(identity);
+          }
+        });
+      },
+      checkEffects: async userId => {
+        const user = ctx.exports.UserDurableObject.get(ctx.exports.UserDurableObject.idFromString(userId));
+        await runInDurableObject(user, (u, c) => {
+          expect(Array.from(u['storage'].gadgets.list())).toEqual([]);
+          expect(c.storage.sql.exec("SELECT name FROM sqlite_master WHERE name LIKE 'usage_%'").toArray()).toEqual([]);
+          expect(Array.from(c.storage.kv.list({prefix: 'deployment-install-attempt-v1'})).length).toBeLessThanOrEqual(1);
+        });
+      },
+      pauseAccess: (skip = 0) => {
+        let enter!: () => void; let resume!: () => void;
+        const entered = new Promise<void>(resolve => {enter = resolve;});
+        const paused = new Promise<void>(resolve => {resume = resolve;});
+        accessPause = async () => {if (skip-- > 0) return; enter(); await paused;};
+        return {entered, resume};
+      },
       pauseRelease: () => {
         let enter!: () => void;
         let resume!: () => void;
@@ -168,6 +211,105 @@ describe('unoffered deployment installation auth-root split', () => {
       revoke();
       await expect(a.prepareDeploymentInstall(release.releaseId)).rejects.toThrow('unavailable');
       expect(await a.listGadgets()).toEqual([]);
+    });
+  });
+});
+
+
+describe('durable identity and last-policy fencing', () => {
+  for (const mode of ['reset', 'aba', 'remove', 'rebind'] as const) {
+    it(`${mode} between prepare and confirm uses User incarnation, not canonical key`, async () => {
+      await scenario(async ({root, identity, checkEffects}) => {
+        const a = await root.authenticateFromCfAccess();
+        const id = await a.getRecoveryPrincipal();
+        const first = await a.prepareDeploymentInstall(release.releaseId);
+        await identity(id, mode);
+        await expect(a.confirmDeploymentInstall(first.attempt)).rejects.toThrow(
+          mode === 'rebind' ? 'No app was created' : 'unavailable');
+        if (mode === 'rebind') expect(await a.prepareDeploymentInstall(release.releaseId)).toEqual(first);
+        await checkEffects(id);
+        expect(await a.listGadgets()).toEqual([]);
+      });
+    });
+  }
+
+  for (const operation of ['prepare', 'confirm'] as const) {
+    for (const event of ['reset', 'aba', 'remove', 'rebind', 'cancel', 'expiry', 'abort'] as const) {
+      it(`${operation} rechecks ${event} after the LAST paused affirmative policy response`, async () => {
+        await scenario(async ({root, identity, pauseAccess, expireAttempt, abort, checkEffects}) => {
+          const a = await root.authenticateFromCfAccess();
+          const id = await a.getRecoveryPrincipal();
+          // A retry gives cancellation a real token while still exercising prepare's last await.
+          const first = await a.prepareDeploymentInstall(release.releaseId);
+          const pause = pauseAccess(operation === 'prepare' ? 1 : 0);
+          const pending = operation === 'prepare' ? a.prepareDeploymentInstall(release.releaseId)
+            : a.confirmDeploymentInstall(first.attempt);
+          const checked = event === 'rebind' && operation === 'prepare'
+            ? expect(pending).resolves.toEqual(first)
+            : expect(pending).rejects.toThrow(event === 'rebind' ? 'No app was created' : 'unavailable');
+          await pause.entered;
+          if (event === 'cancel') await a.cancelDeploymentInstall(first.attempt);
+          else if (event === 'expiry') await expireAttempt(id);
+          else if (event === 'abort') abort.abort();
+          else await identity(id, event);
+          pause.resume();
+          await checked;
+          await checkEffects(id);
+          expect(await a.listGadgets()).toEqual([]);
+        });
+      });
+    }
+  }
+
+  for (const event of ['reset', 'aba', 'remove', 'expiry'] as const) {
+    it(`initial prepare refuses ${event} during its last policy response`, async () => {
+      await scenario(async ({root, identity, pauseAccess, expireAttempt, checkEffects}) => {
+        const a = await root.authenticateFromCfAccess();
+        const id = await a.getRecoveryPrincipal();
+        const pause = pauseAccess(1);
+        const denied = expect(a.prepareDeploymentInstall(release.releaseId)).rejects.toThrow('unavailable');
+        await pause.entered;
+        if (event === 'expiry') await expireAttempt(id);
+        else await identity(id, event);
+        pause.resume();
+        await denied;
+        await checkEffects(id);
+      });
+    });
+  }
+
+  for (const stage of ['access', 'release'] as const) {
+    it(`initial prepare cannot adopt a replacement identity during ${stage}`, async () => {
+      await scenario(async ({root, identity, pauseAccess, pauseRelease, checkEffects}) => {
+        const a = await root.authenticateFromCfAccess();
+        const id = await a.getRecoveryPrincipal();
+        const pause = stage === 'access' ? pauseAccess() : pauseRelease();
+        const denied = expect(a.prepareDeploymentInstall(release.releaseId)).rejects.toThrow('unavailable');
+        await pause.entered;
+        await identity(id, 'aba');
+        pause.resume();
+        await denied;
+        await checkEffects(id);
+      });
+    });
+  }
+
+  it('expired cancelled slot is replaced once; stale cancellation and burst retry never renew it', async () => {
+    await scenario(async ({root, expireAttempt, checkEffects}) => {
+      const a = await root.authenticateFromCfAccess();
+      const id = await a.getRecoveryPrincipal();
+      const first = await a.prepareDeploymentInstall(release.releaseId);
+      await a.cancelDeploymentInstall(first.attempt);
+      await expireAttempt(id);
+      const burst = await Promise.all(Array.from({length: 20}, () => a.prepareDeploymentInstall(release.releaseId)));
+      const next = burst[0];
+      expect(next.attempt).not.toBe(first.attempt);
+      for (const result of burst) expect(result).toEqual(next);
+      await a.cancelDeploymentInstall(first.attempt);
+      await expect(a.confirmDeploymentInstall(first.attempt)).rejects.toThrow('unavailable');
+      await expect(a.confirmDeploymentInstall(next.attempt)).rejects.toThrow('No app was created');
+      expect(await a.prepareDeploymentInstall(release.releaseId)).toEqual(next);
+      await checkEffects(id);
     });
   });
 });

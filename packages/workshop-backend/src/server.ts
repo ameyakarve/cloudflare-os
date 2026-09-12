@@ -99,6 +99,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   #userId: DurableObjectId;
   #installSession = crypto.randomUUID();
   #installClosed = false;
+  // Root cancellation fence only; User identity incarnation is independently durable.
   #installGeneration = 0;
   #installPreparation?: DeploymentInstallPreparation;
   #installPending?: Promise<DeploymentInstallPreparation>;
@@ -127,6 +128,8 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     // This initial slice requires a trusted ingress identity and its stored User binding.
     const principal = this.externalIdentityKey;
     if (!principal) throw new Error('Installation release is unavailable.');
+    const incarnation = await this.#user.getDeploymentInstallIncarnation(principal);
+    this.#checkInstallLive(generation);
     await readDeploymentAccess(this.env, principal);
     this.#checkInstallLive(generation);
     const release = await this.#readInstallRelease();
@@ -134,12 +137,13 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     if (!release || release.releaseId !== releaseId) throw new Error('Installation release is unavailable.');
     const digest = await deploymentInstallReleaseDigest(release);
     this.#checkInstallLive(generation);
-    const ticket = await this.#user.prepareDeploymentInstallAttempt(this.#installSession, digest, principal, issuedAt);
+    const ticket = await this.#user.prepareDeploymentInstallAttempt(this.#installSession, digest, principal, issuedAt, incarnation);
     try {
       this.#checkInstallLive(generation);
-      await this.#user.checkDeploymentInstallAttempt(this.#installSession, ticket.attempt, digest, principal);
-      this.#checkInstallLive(generation);
       await readDeploymentAccess(this.env, principal);
+      this.#checkInstallLive(generation);
+      // Last remote decision checks durable identity/attempt after every publisher/policy await.
+      await this.#user.checkDeploymentInstallAttempt(this.#installSession, ticket.attempt, digest, principal);
       this.#checkInstallLive(generation);
       if (Date.now() >= ticket.expiresAt) throw new Error('Installation attempt is unavailable.');
       const preparation = {...ticket, principal, release};
@@ -190,9 +194,9 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
         throw new Error('Installation release is unavailable.');
       }
       this.#checkInstallLive(generation);
-      await this.#user.checkDeploymentInstallAttempt(this.#installSession, prepared.attempt, digest, prepared.principal);
-      this.#checkInstallLive(generation);
       await readDeploymentAccess(this.env, prepared.principal);
+      this.#checkInstallLive(generation);
+      await this.#user.checkDeploymentInstallAttempt(this.#installSession, prepared.attempt, digest, prepared.principal);
       this.#checkInstallLive(generation);
       if (Date.now() >= prepared.expiresAt) throw new Error('Installation attempt is unavailable.');
     } catch {

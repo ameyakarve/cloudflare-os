@@ -95,6 +95,7 @@ type DeploymentInstallAttempt = {
   attempt: string;
   digest: string;
   principal: string;
+  incarnation: string;
   expiresAt: number;
   cancelled: boolean;
 };
@@ -338,25 +339,42 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     }
   }
 
+  /** Private identity snapshot before auth-root awaits; shares the existing User identity epoch. */
+  getDeploymentInstallIncarnation(principal: string): string {
+    if (this.storage.deploymentIdentity.get()?.storageKey !== principal) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    return this.identityIncarnation();
+  }
+
+  private identityIncarnation(): string {
+    let incarnation = this.ctx.storage.kv.get<string>('usage-identity-v2');
+    if (!incarnation) this.ctx.storage.kv.put('usage-identity-v2', incarnation = crypto.randomUUID());
+    return incarnation;
+  }
+
   /** Private auth-root preparation only. This slot cannot publish a workspace or opt in a Gadget. */
   async prepareDeploymentInstallAttempt(session: string, digest: string, principal: string,
-      issuedAt: number): Promise<{attempt: string; expiresAt: number}> {
+      issuedAt: number, incarnation: string): Promise<{attempt: string; expiresAt: number}> {
     const expiresAt = issuedAt + 60_000;
     if (!/^[a-f0-9-]{36}$/.test(session) || !/^[a-f0-9]{64}$/.test(digest) ||
         !Number.isSafeInteger(issuedAt) || issuedAt > Date.now() || expiresAt <= Date.now()) {
       throw new Error('Installation attempt is unavailable.');
     }
     await this.getDeploymentAccessGrant();
-    if (expiresAt <= Date.now() || this.storage.deploymentIdentity.get()?.storageKey !== principal) {
+    if (expiresAt <= Date.now() || this.storage.deploymentIdentity.get()?.storageKey !== principal ||
+        !incarnation || this.ctx.storage.kv.get<string>('usage-identity-v2') !== incarnation) {
       throw new Error('Installation attempt is unavailable.');
     }
     const existing = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
     if (existing && existing.expiresAt > Date.now()) {
       if (existing.session !== session || existing.digest !== digest ||
-          existing.principal !== principal || existing.cancelled) throw new Error('Installation attempt is unavailable.');
+          existing.principal !== principal || existing.incarnation !== incarnation || existing.cancelled) {
+        throw new Error('Installation attempt is unavailable.');
+      }
       return {attempt: existing.attempt, expiresAt: existing.expiresAt};
     }
-    const record: DeploymentInstallAttempt = {session, digest, principal, expiresAt,
+    const record: DeploymentInstallAttempt = {session, digest, principal, incarnation, expiresAt,
       attempt: crypto.randomUUID(), cancelled: false};
     this.ctx.storage.kv.put(INSTALL_ATTEMPT_KEY, record);
     return {attempt: record.attempt, expiresAt};
@@ -368,7 +386,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     const record = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
     if (!record || record.session !== session || record.attempt !== attempt || record.digest !== digest ||
         record.principal !== principal || record.cancelled || record.expiresAt <= Date.now() ||
-        this.storage.deploymentIdentity.get()?.storageKey !== principal) {
+        this.storage.deploymentIdentity.get()?.storageKey !== principal || !record.incarnation ||
+        this.ctx.storage.kv.get<string>('usage-identity-v2') !== record.incarnation) {
       throw new Error('Installation attempt is unavailable.');
     }
   }
@@ -386,8 +405,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     return this.usageOwnerV2 ??= new UserUsageV2(this.ctx, () => {
       const identity = this.storage.deploymentIdentity.get();
       if (!identity) return undefined;
-      let incarnation = this.ctx.storage.kv.get<string>('usage-identity-v2');
-      if (!incarnation) this.ctx.storage.kv.put('usage-identity-v2', incarnation = crypto.randomUUID());
+      const incarnation = this.identityIncarnation();
       return {owner: this.ctx.id.toString(), key: identity.storageKey, incarnation, deployment: this.env.DEPLOYMENT_USAGE_V2_ROUTE};
     }, (deployment = this.env.DEPLOYMENT_USAGE_V2_ROUTE) => {
       if (!deployment?.startsWith('DEPLOYMENT_USAGE_V2_ROUTE_')) return undefined;
