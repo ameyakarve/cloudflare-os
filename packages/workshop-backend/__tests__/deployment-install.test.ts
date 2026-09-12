@@ -135,7 +135,7 @@ describe('unoffered deployment installation auth-root split', () => {
       const a = await root.authenticateFromCfAccess();
       const b = await other.authenticateFromCfAccess();
       const first = await a.prepareDeploymentInstall(release.releaseId);
-      await b.cancelDeploymentInstall(first.attempt);
+      await expect(b.cancelDeploymentInstall(first.attempt)).rejects.toThrow('unavailable');
       await expect(a.confirmDeploymentInstall(first.attempt)).rejects.toThrow('No app was created');
       await a.cancelDeploymentInstall(first.attempt);
       await expect(a.confirmDeploymentInstall(first.attempt)).rejects.toThrow('unavailable');
@@ -305,7 +305,7 @@ describe('durable identity and last-policy fencing', () => {
       const next = burst[0];
       expect(next.attempt).not.toBe(first.attempt);
       for (const result of burst) expect(result).toEqual(next);
-      await a.cancelDeploymentInstall(first.attempt);
+      await expect(a.cancelDeploymentInstall(first.attempt)).rejects.toThrow('unavailable');
       await expect(a.confirmDeploymentInstall(first.attempt)).rejects.toThrow('unavailable');
       await expect(a.confirmDeploymentInstall(next.attempt)).rejects.toThrow('No app was created');
       expect(await a.prepareDeploymentInstall(release.releaseId)).toEqual(next);

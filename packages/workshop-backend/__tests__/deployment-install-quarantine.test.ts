@@ -32,16 +32,19 @@ async function fixture(run: (f: {
   publish: () => Promise<{workspaceId: string; workpieceId: number; releaseId: string}>;
   other: () => Promise<{user: DurableObjectStub<UserDurableObject>; publish: () => Promise<DeploymentInstallResult>}>;
   revoke: () => void;
+  withdraw: () => void;
   changeRelease: () => void;
   cancel: () => Promise<void>;
   abort: AbortController;
   slot: () => Promise<Slot>;
   ticket: () => Promise<InstallQuarantineTicket>;
-  publicConfirm: () => Promise<unknown>;
+  publicConfirm: () => Promise<DeploymentInstallResult>;
+  publicCancel: () => Promise<DeploymentInstallResult | null>;
+  offering: () => ReturnType<import('@gadgets/workshop-shared/api').AuthenticatedApi['getDeploymentInstallOffering']>;
   probePublic: () => Promise<void>;
   pauseInit: () => {entered: Promise<void>; resume: () => void};
   fresh: () => Promise<{stage: () => Promise<{workspaceId: string; workpieceId: number}>}>;
-}) => Promise<void>) {
+}) => Promise<void>, offered = false) {
   const anchor = env.TEST_OVERSEER.getByName(crypto.randomUUID());
   await runInDurableObject(anchor, async (instance, ctx) => {
     const digest = await deploymentInstallReleaseDigest(release);
@@ -64,8 +67,9 @@ async function fixture(run: (f: {
       }};
     const realEnv = instance['env'];
     const prior = {app: realEnv.MILESVAULT_DOCTOR_APP, auth: realEnv.MILESVAULT_AUTH,
-      policy: realEnv.DEPLOYMENT_ACCESS_POLICY};
+      policy: realEnv.DEPLOYMENT_ACCESS_POLICY, offering: realEnv.DEPLOYMENT_INSTALL_OFFERING};
     Object.assign(realEnv, {MILESVAULT_DOCTOR_APP: publisher, MILESVAULT_AUTH: 'true',
+      DEPLOYMENT_INSTALL_OFFERING: offered ? 'true' : undefined,
       DEPLOYMENT_ACCESS_POLICY: {checkAccess: async () => revoked ? {allowed: false} : ({allowed: true, validUntil: Date.now() + 60_000})}});
     const abort = new AbortController();
     const context = Object.assign(createExecutionContext(), {exports: ctx.exports,
@@ -94,8 +98,11 @@ async function fixture(run: (f: {
             publish: () => otherLocal[publishDeploymentInstall](otherPrepared.attempt)};
         },
         revoke: () => {revoked = true;},
+        withdraw: () => {realEnv.DEPLOYMENT_INSTALL_OFFERING = undefined;},
         changeRelease: () => {currentRelease = {...release, uiSha256: 'b'.repeat(64)};},
-        cancel: () => api.cancelDeploymentInstall(prepared.attempt), abort, slot,
+        cancel: async () => { await api.cancelDeploymentInstall(prepared.attempt); }, abort, slot,
+        publicCancel: () => api.cancelDeploymentInstall(prepared.attempt),
+        offering: () => api.getDeploymentInstallOffering(),
         ticket: async () => {
           const s = await slot();
           return {ownerId: user.id.toString(), session: s.session, attempt: s.attempt, digest: s.digest,
@@ -130,7 +137,7 @@ async function fixture(run: (f: {
       expect(budget).not.toHaveBeenCalled();
       vi.restoreAllMocks();
       Object.assign(realEnv, {MILESVAULT_DOCTOR_APP: prior.app, MILESVAULT_AUTH: prior.auth,
-        DEPLOYMENT_ACCESS_POLICY: prior.policy});
+        DEPLOYMENT_ACCESS_POLICY: prior.policy, DEPLOYMENT_INSTALL_OFFERING: prior.offering});
     }
   });
 }
@@ -388,6 +395,69 @@ function publicationBarrier(phase: 'binding' | 'ready' | 'publish') {
     resume: () => {state.resumed = true;}};
 }
 
+describe('deployment-owned public host confirmation', () => {
+  it('defaults OFF without even disclosing an offering or allocating', async () => {
+    await fixture(async f => {
+      expect(await f.offering()).toBeNull();
+      await denied(f.publicConfirm, 'not available');
+      expect((await f.slot()).workspaceId).toBeUndefined();
+    });
+  });
+
+  it('public confirm publishes the exact new tuple; retry and cancel report the existing commit', async () => {
+    await fixture(async f => {
+      expect(await f.offering()).toEqual(release);
+      const installed = await f.publicConfirm();
+      expect(installed.releaseId).toBe(release.releaseId);
+      expect(installed.workspaceId).toBe((await f.slot()).workspaceId);
+      f.withdraw();
+      expect(await f.offering()).toBeNull();
+      expect(await f.publicConfirm()).toEqual(installed);
+      expect(await f.publicCancel()).toEqual(installed);
+      expect(await f.publicConfirm()).toEqual(installed);
+    }, true);
+  });
+
+  it('cancel acknowledgement proves no commit, including cancellation during actual snapshot initialization', async () => {
+    await fixture(async f => {
+      const pause = f.pauseInit();
+      const pending = f.publicConfirm();
+      const rejected = denied(() => pending, 'unavailable');
+      await pause.entered;
+      const closing = f.publicCancel();
+      while (!(await f.slot()).cancelled) await new Promise(r => setTimeout(r, 1));
+      pause.resume();
+      expect(await closing).toBeNull();
+      await rejected;
+      await denied(f.publicConfirm, 'unavailable');
+    }, true);
+  });
+
+  it('withdrawal during actual initialization prevents publication without fabricating cancellation', async () => {
+    await fixture(async f => {
+      const pause = f.pauseInit();
+      const pending = f.publicConfirm();
+      const rejected = expect(pending).rejects.toThrow();
+      await pause.entered;
+      f.withdraw();
+      pause.resume();
+      await rejected;
+      expect(await f.user.listGadgets()).toEqual([]);
+      expect(await f.publicCancel()).toBeNull();
+    }, true);
+  });
+
+  for (const change of ['revoke', 'changeRelease'] as const) {
+    it(`public confirm refuses ${change} after review`, async () => {
+      await fixture(async f => {
+        f[change]();
+        await expect(f.publicConfirm()).rejects.toThrow();
+        expect((await f.slot()).workspaceId).toBeUndefined();
+      }, true);
+    });
+  }
+});
+
 describe('actual auth-root -> User -> Overseer private publication', () => {
   it('two actual authenticated roots publish only their own new workspaces and never exchange readiness authority', async () => {
     await fixture(async ({publish, user, targets, other, ticket}) => {
@@ -483,7 +553,7 @@ describe('actual auth-root -> User -> Overseer private publication', () => {
       expect(await b.listGadgets()).toEqual([]);
       await cancel(); abort.abort();
       expect(await publish()).toEqual(first); // Already committed is not falsely reported cancelled.
-      await denied(publicConfirm, 'unavailable');
+      expect(await publicConfirm()).toEqual(first); // Public recovery is lookup-only, including while OFF.
       try { await runInDurableObject(user, (_u, c) => c.abort('publication User reopen')); } catch { /* native eviction */ }
       try { await runInDurableObject(target, (_o, c) => c.abort('publication target reopen')); } catch { /* native eviction */ }
       vi.spyOn(Date, 'now').mockReturnValue(original.expiresAt + 1);

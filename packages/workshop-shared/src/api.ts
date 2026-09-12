@@ -358,16 +358,18 @@ export const getAuthErrorCode = authErrors.getCode;
 
 /** Top-level API exposed to the user after they have authenticated. */
 export interface AuthenticatedApi extends RpcTarget {
+  /** One deployment-owned offering, or null while the deployment's default-OFF gate is closed. No preparation or installation. */
+  getDeploymentInstallOffering(): Promise<import('./deployment-install.js').DeploymentInstallRelease | null>;
   /**
    * Prepare deployment-owned text only; no workspace, controls or approval is created.
    * The forbidden tail preserves extra arguments across return-stub validation so the auth root
    * can reject them rather than silently strip caller-supplied authority selectors.
    */
   prepareDeploymentInstall(...args: [releaseId: string, ...forbidden: unknown[]]): Promise<import('./deployment-install.js').DeploymentInstallPreparation>;
-  /** Confirm the same short-lived auth-root attempt. Unavailable until readiness review is complete. */
+  /** Deliberately confirm the same root's reviewed attempt while offered; retries recover its exact commit. */
   confirmDeploymentInstall(...args: [attempt: string, ...forbidden: unknown[]]): Promise<import('./deployment-install.js').DeploymentInstallResult>;
-  /** Cancel only this root's attempt; cancellation never grants authority. */
-  cancelDeploymentInstall(...args: [attempt: string, ...forbidden: unknown[]]): Promise<void>;
+  /** Close this root's attempt. Null proves cancellation before commit; a result means already committed. Errors mean unknown, never proof of cancellation. */
+  cancelDeploymentInstall(...args: [attempt: string, ...forbidden: unknown[]]): Promise<import('./deployment-install.js').DeploymentInstallResult | null>;
   /** Get profile info for the user who is logged in. */
   whoami(): Promise<AiChatAuthorInfo>;
 

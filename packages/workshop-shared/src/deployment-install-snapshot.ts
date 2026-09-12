@@ -87,7 +87,7 @@ export async function validateDeploymentInstallSnapshot(
   const bytes = encodeOwned(snapshot);
   const releaseId = descriptor.blueprintId;
   const releaseDigest = await deploymentInstallReleaseDigest(descriptor);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
   const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
   if (hash !== expectedHash || snapshot.releaseDigest !== releaseDigest || snapshot.blueprintId !== releaseId) {
     throw new Error('Installation snapshot is unavailable.');

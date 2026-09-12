@@ -6,6 +6,8 @@ import type { ProductAnalyticsRecord } from "./analytics";
 declare global {
   namespace Cloudflare {
     interface Env {
+      /** Deployment-owned only; literal 'true' offers new installations. Unset defaults OFF. */
+      DEPLOYMENT_INSTALL_OFFERING?: string;
     MILESVAULT_DOCTOR_APP?: Service<import("@gadgets/workshop-shared/deployment-doctor").DeploymentDoctorApplication>;
     MILESVAULT_LEDGER_APP?: Service<import("@gadgets/workshop-shared/deployment-ledger").DeploymentLedgerApplication>;
       // Deployment-wide admin usernames: a JSON binding, or the same array as a JSON string

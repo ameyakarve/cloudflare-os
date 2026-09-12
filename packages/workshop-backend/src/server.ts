@@ -186,10 +186,16 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
 
   @skipRpcValidation()
   async confirmDeploymentInstall(...args: [string]): Promise<DeploymentInstallResult> {
+    if (args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 128) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    // Recover an existing commit even after the offering is withdrawn. Never write while OFF.
+    const result = await this.#user.getDeploymentInstallResult(this.#installSession, args[0]);
+    if (result) return result;
     const generation = this.#installGeneration;
     this.#checkInstallLive(generation);
     const prepared = this.#installPreparation;
-    if (args.length !== 1 || !prepared || args[0] !== prepared.attempt || Date.now() >= prepared.expiresAt) {
+    if (!prepared || args[0] !== prepared.attempt || Date.now() >= prepared.expiresAt) {
       throw new Error('Installation attempt is unavailable.');
     }
     try {
@@ -209,14 +215,25 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     } catch {
       throw new Error('Installation attempt is unavailable.');
     }
-    // INTERNAL SPLIT: no allocation, opt-in, publication, budget or operation until the new-only
-    // coordinator and its post-await readiness/host composition tests have independent review.
-    // This is a code gate, intentionally not an admin/deployment flag or a catalog preference.
-    throw new Error('Installation is not available yet. No app was created.');
+    if (this.env.DEPLOYMENT_INSTALL_OFFERING !== 'true') {
+      throw new Error('Installation is not available yet. No app was created.');
+    }
+    return this[publishDeploymentInstall](args[0], true);
+  }
+
+  async getDeploymentInstallOffering() {
+    if (this.env.DEPLOYMENT_INSTALL_OFFERING !== 'true') return null;
+    const generation = this.#installGeneration;
+    this.#checkInstallLive(generation);
+    if (!this.externalIdentityKey) return null;
+    await readDeploymentAccess(this.env, this.externalIdentityKey);
+    const release = await this.#readInstallRelease();
+    this.#checkInstallLive(generation);
+    return this.env.DEPLOYMENT_INSTALL_OFFERING === 'true' ? release ?? null : null;
   }
 
   // Own symbol property: not a Cap'n Web prototype/string method. Only kernel-local tests/code
-  // can stage this leg; public confirm above cannot reach it, and it cannot publish or opt in.
+  // can stage this leg; it cannot publish or opt in.
   [stageDeploymentInstallQuarantine] = async (attempt: string) => {
     const generation = this.#installGeneration;
     this.#checkInstallLive(generation);
@@ -246,7 +263,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   };
 
   // Trusted composition entry, not host consent and not reachable through a public RPC string.
-  [publishDeploymentInstall] = async (attempt: string): Promise<DeploymentInstallResult> => {
+  [publishDeploymentInstall] = async (attempt: string, requireOffering = false): Promise<DeploymentInstallResult> => {
     const prepared = this.#installPreparation;
     if (!prepared || prepared.attempt !== attempt) throw new Error('Installation attempt is unavailable.');
     const generation = this.#installGeneration;
@@ -263,6 +280,9 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       const access = await readDeploymentAccess(this.env, prepared.principal);
       this.#checkInstallLive(generation);
       if (Date.now() >= prepared.expiresAt) throw new Error('Installation attempt is unavailable.');
+      if (requireOffering && this.env.DEPLOYMENT_INSTALL_OFFERING !== 'true') {
+        throw new Error('Installation offering is unavailable.');
+      }
       return Math.min(access?.validUntil ?? prepared.expiresAt, prepared.expiresAt);
     };
     // Committed-result lookup deliberately precedes liveness: cancellation cannot undo a commit
@@ -290,13 +310,17 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   };
 
   @skipRpcValidation()
-  async cancelDeploymentInstall(...args: [string]): Promise<void> {
+  async cancelDeploymentInstall(...args: [string]): Promise<DeploymentInstallResult | null> {
     if (args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 128) {
       throw new Error('Installation attempt is unavailable.');
     }
-    if (args[0] !== this.#installPreparation?.attempt) return;
+    if (args[0] !== this.#installPreparation?.attempt) throw new Error('Installation attempt is unavailable.');
     ++this.#installGeneration;
-    await this.#user.cancelDeploymentInstallAttempt(this.#installSession, args[0]);
+    const closed = await this.#user.cancelDeploymentInstallAttempt(this.#installSession, args[0]);
+    if (closed) return null;
+    const result = await this.#user.getDeploymentInstallResult(this.#installSession, args[0]);
+    if (!result) throw new Error('Installation outcome is unavailable.');
+    return result;
   }
 
   [Symbol.dispose]() {

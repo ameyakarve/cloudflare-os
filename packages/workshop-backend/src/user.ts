@@ -412,12 +412,13 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     }
   }
 
-  /** Close-only cleanup may run after revocation; a stale cancellation cannot affect another slot. */
+  /** Close-only cleanup may run after revocation. True proves this exact slot closed before commit;
+   * false means committed or no longer known, never proof of cancellation. Stale calls cannot close another slot. */
   async cancelDeploymentInstallAttempt(session: string, attempt: string) {
     const record = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
-    if (record?.session !== session || record.attempt !== attempt || record.result) return;
+    if (record?.session !== session || record.attempt !== attempt || record.result) return false;
     this.ctx.storage.kv.put(INSTALL_ATTEMPT_KEY, {...record, cancelled: true});
-    if (!record.workspaceId) return;
+    if (!record.workspaceId) return true;
     const targets = this.ctx.exports.OverseerDurableObject;
     await targets.get(targets.idFromString(record.workspaceId)).cancelDeploymentInstallQuarantine(this.#installTicket(record));
     const current = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
@@ -425,6 +426,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       const {workspaceId: _target, ...closed} = current;
       this.ctx.storage.kv.put(INSTALL_ATTEMPT_KEY, closed);
     }
+    return true;
   }
 
   #installTicket(record: DeploymentInstallAttempt): InstallQuarantineTicket {
