@@ -123,13 +123,36 @@ describe('specialist configuration and RPC membrane', () => {
     await expect(pending).rejects.toThrow('cancelled');
   });
 
-  it('refuses a resumed allowance with a replaced identity or deadline', async () => {
+  describe.each(['owned', 'borrowed'] as const)('%s resumed allowance', ownership => {
+    it.each(['identity', 'deadline'])('refuses a replaced %s without authorizing work', async field => {
+      const allowance = new RootAllowance();
+      await using parent = ownership === 'borrowed' ? await UsageScope.open(new RpcStub(allowance)) : undefined;
+      const expected = {...allowance.grant, ...(field === 'identity'
+        ? {runId: 'different'} : {expiresAt: allowance.grant.expiresAt - 1})};
+      // Use the real borrow membrane used by specialist/tool budgets, not a raw owning root.
+      await expect((async () => {
+        await using scope = await UsageScope.open(new RpcStub(parent ? parent.borrow() : allowance), expected);
+        return scope.grant;
+      })()).rejects.toThrow('OS allowance expired');
+      expect(allowance.reservations).toEqual([]);
+      if (parent) {
+        expect(allowance.finished).toBe(false);
+        await parent.reserve({capabilityCalls: 1});
+        expect(allowance.reservations).toEqual([{capabilityCalls: 1}]);
+      } else {
+        // A failed owned acquisition must not strand quota (also covered with actual User/M V2).
+        expect(allowance.finished).toBe(true);
+      }
+    });
+  });
+
+  it.each([false, true])('closes an expired owned allowance (resume=%s)', async resume => {
     const allowance = new RootAllowance();
-    await expect(UsageScope.open(new RpcStub(allowance), {...allowance.grant,
-      expiresAt: allowance.grant.expiresAt - 1})).rejects.toThrow('OS allowance expired');
-    await expect(UsageScope.open(new RpcStub(allowance), {...allowance.grant,
-      runId: 'different'})).rejects.toThrow('OS allowance expired');
-    expect(allowance.finished).toBe(false);
+    allowance.grant.expiresAt = Date.now() - 1;
+    await expect(UsageScope.open(new RpcStub(allowance), resume ? {...allowance.grant} : undefined))
+      .rejects.toThrow('OS allowance expired');
+    expect(allowance.finished).toBe(true);
+    expect(allowance.reservations).toEqual([]);
   });
 
   it('stops calls after cancellation and bounds sequential calls and data', async () => {
