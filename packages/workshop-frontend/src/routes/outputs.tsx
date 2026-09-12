@@ -18,6 +18,7 @@ import {
 } from '@phosphor-icons/react'
 import { OutputSummary } from '@gadgets/workshop-shared/api'
 import { useAuthenticatedApi } from '../AuthContext'
+import { DeploymentInstallCard } from '../features/deployment-installs/DeploymentInstallCard'
 import { useDocumentTitle } from '../useDocumentTitle'
 import ViewToggle from '../components/ViewToggle'
 import { MENU_CONTENT, MENU_ITEM, MENU_POSITIONER_STYLE } from '../components/menuStyles'
@@ -584,6 +585,8 @@ function OutputsPage() {
         </div>
         <ViewToggle view={view} onChange={setView} />
       </header>
+
+      <DeploymentInstallCard />
 
       {/* Toolbar: format chips on the left (the browsing axis), scope + search on the right (the
           refining controls). Configured categories stay visible with zero counts. */}
