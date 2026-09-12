@@ -161,7 +161,7 @@ it("uses the stored exact User DO identity and resumes only the supplied existin
   });
 }, 15_000);
 
-it("charges schedule starts and refuses retained callbacks, observations and writes after expiry", async () => {
+it("legacy optional usage charges schedule starts and refuses retained callbacks, observations and writes after expiry", async () => {
   const {env} = await import("cloudflare:workers");
   const {runInDurableObject} = await import("cloudflare:test");
   const user = env.TEST_USER.getByName(crypto.randomUUID());
@@ -183,9 +183,10 @@ it("charges schedule starts and refuses retained callbacks, observations and wri
   try {
     await runInDurableObject(env.TEST_OVERSEER.getByName(crypto.randomUUID()), async (instance, ctx) => {
       const impl = instance["impl"], oldRequired = instance["env"].DEPLOYMENT_USAGE_REQUIRED,
-          oldBlueprints = instance["env"].BLUEPRINTS;
-      instance["env"].DEPLOYMENT_USAGE_REQUIRED = "true";
-      Object.assign(instance["env"], {BLUEPRINTS: {get: async () => null}});
+          oldPolicy = instance["env"].DEPLOYMENT_USAGE_POLICY, oldBlueprints = instance["env"].BLUEPRINTS;
+      // This synthetic policy intentionally implements V1. Protected V2 is tested with actual M.
+      instance["env"].DEPLOYMENT_USAGE_REQUIRED = undefined;
+      Object.assign(instance["env"], {DEPLOYMENT_USAGE_POLICY: policy, BLUEPRINTS: {get: async () => null}});
       impl.ownerId = user.id.toString(); impl.users = env.TEST_USER;
       impl.storage.gatekeepers.put({id: 1, resourceTitle: "Schedule fixture",
         class: ctx.exports.IdentityTestGatekeeper({props: {subject: "schedule@example.com", storageKey: "Schedule@example.com"}}),
@@ -218,7 +219,10 @@ it("charges schedule starts and refuses retained callbacks, observations and wri
         expect([...impl.storage.actions.list()]).toHaveLength(0);
         firing.callback[Symbol.dispose]();
         new RpcStub(firing.approvalQueue)[Symbol.dispose]();
-      } finally { instance["env"].DEPLOYMENT_USAGE_REQUIRED = oldRequired; instance["env"].BLUEPRINTS = oldBlueprints; }
+      } finally {
+        instance["env"].DEPLOYMENT_USAGE_REQUIRED = oldRequired; instance["env"].DEPLOYMENT_USAGE_POLICY = oldPolicy;
+        instance["env"].BLUEPRINTS = oldBlueprints;
+      }
     });
   } finally { await runInDurableObject(user, instance => { delete instance["env"].DEPLOYMENT_USAGE_POLICY; }); }
 });

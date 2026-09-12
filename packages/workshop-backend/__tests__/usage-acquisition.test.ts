@@ -25,12 +25,15 @@ it('finishes a received root when its grant fails validation', async () => {
   expect(finishes).toBe(1);
 });
 
-it('native Overseer retains and finishes a late User root without releasing it to the caller', async () => {
+it('legacy optional Overseer retains and finishes a late User root without releasing it to the caller', async () => {
   await runInDurableObject(env.TEST_OVERSEER.getByName('late-user-root'), async instance => {
     const impl = instance['impl'];
-    const users = impl.users, required = impl.env.DEPLOYMENT_USAGE_REQUIRED, check = impl.checkDeploymentAccess;
+    const users = impl.users, required = impl.env.DEPLOYMENT_USAGE_REQUIRED, policy = impl.env.DEPLOYMENT_USAGE_POLICY,
+      check = impl.checkDeploymentAccess;
     impl.ownerId = users.idFromName('synthetic-owner').toString();
-    impl.env.DEPLOYMENT_USAGE_REQUIRED = 'true';
+    // V1 regression only. Required controls now deliberately select pairedV2, covered separately.
+    impl.env.DEPLOYMENT_USAGE_REQUIRED = undefined;
+    Object.assign(impl.env, {DEPLOYMENT_USAGE_POLICY: {}});
     impl.checkDeploymentAccess = async () => undefined;
     let resolve!: (root: RpcStub<Run>) => void;
     const late = new Promise<RpcStub<Run>>(r => { resolve = r; });
@@ -48,7 +51,8 @@ it('native Overseer retains and finishes a late User root without releasing it t
       expect(finishes).toBe(1);
       expect(reservations).toBe(0);
     } finally {
-      impl.users = users; impl.env.DEPLOYMENT_USAGE_REQUIRED = required; impl.checkDeploymentAccess = check;
+      impl.users = users; impl.env.DEPLOYMENT_USAGE_REQUIRED = required;
+      impl.env.DEPLOYMENT_USAGE_POLICY = policy; impl.checkDeploymentAccess = check;
     }
   });
 }, 10000);
