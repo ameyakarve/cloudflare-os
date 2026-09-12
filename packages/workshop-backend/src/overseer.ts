@@ -1,3 +1,5 @@
+import { INSTALL_QUARANTINE_KEY, type InstallQuarantineRecord, type InstallQuarantineTicket } from './deployment-install-quarantine.js';
+import { validateDeploymentInstallSnapshot, deploymentInstallReleaseDigest } from '@gadgets/workshop-shared/deployment-install';
 import { OverseerUsageLifecycle } from './overseer-usage-lifecycle.js';
 import { OverseerUsageAcquisition, type UsageExecution } from './overseer-usage-acquisition.js';
 import type { UsageReceiverTicket } from './usage-acquisition-receiver.js';
@@ -1947,8 +1949,16 @@ class OverseerImpl implements AgentHooks {
     return ctx;
   }
 
+  /** Marker absence preserves legacy behavior; no state in this leg releases quarantine. */
+  assertInstallReady(): void {
+    if (this.ctx.storage.kv.get(INSTALL_QUARANTINE_KEY)) {
+      throw new Error('Installation workspace is quarantined.');
+    }
+  }
+
   /** Check workspace ownership and, for an agent turn, its authenticated initiating user. */
   async checkDeploymentAccess(initiator?: AiChatAuthorInfo): Promise<DeploymentAccessGrant | undefined> {
+    this.assertInstallReady();
     if (!deploymentAccessEnabled(this.env)) return undefined;
     if (!this.ownerId) throw new DeploymentAccessError();
     const ids = new Set([this.ownerId]);
@@ -2121,6 +2131,11 @@ class OverseerImpl implements AgentHooks {
 
   // Sole host alarm writer. Recompute inside the input gate, including after awaited writes.
   async updateSharedAlarm(): Promise<void> {
+    const quarantine = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+    if (quarantine) {
+      await this.ctx.storage.setAlarm(quarantine.ticket.expiresAt);
+      return;
+    }
     const usageDue = this.usageLifecycle.journal.nextAlarm();
     if (this.#runningAgents.size > 0) {
       this.#agentAlarmAt ??= Date.now() + OverseerImpl.#AGENT_KEEPALIVE_ALARM_MS;
@@ -5518,6 +5533,7 @@ class OverseerImpl implements AgentHooks {
    * so its explicit human Save path never has to be exposed as an agent-callable Gadget method.
    */
   async getGadgetUiSession(gadgetId: WorkpieceId, chatId?: number, joinedAs?: SessionKind, clientUserId?: string): Promise<RpcStub<any>> {
+    this.assertInstallReady();
     let gadget = this.getGadgetRecord(gadgetId);
     const resource = this.getPrivateControlResource(gadgetId, clientUserId);
     if (resource) {
@@ -5595,6 +5611,7 @@ class OverseerImpl implements AgentHooks {
 
   /** Browser-only bundle lookup; saved Gadget files and history are never rewritten. */
   async getPrivateControlUi(gadgetId: WorkpieceId, clientUserId: string): Promise<UiBundle | undefined> {
+    this.assertInstallReady();
     if (!this.getPrivateControlResource(gadgetId, clientUserId)) return undefined;
     if (!this.env.MILESVAULT_DOCTOR_APP) throw new Error("Private application controls unavailable.");
     const release = this.getGadgetRecord(gadgetId).doctorControls!;
@@ -5605,6 +5622,7 @@ class OverseerImpl implements AgentHooks {
   }
 
   async getGadgetUiBundle(gadgetId: WorkpieceId, chatId?: number): Promise<UiBundle | null> {
+    this.assertInstallReady();
     // TODO: Bundle the UI? For now we just return client.js.
     if (this.getGadgetRecord(gadgetId).systemOutput) chatId = undefined;
     this.checkChatExistsAndMaterializeChanges(chatId);
@@ -10655,6 +10673,7 @@ class OverseerImpl implements AgentHooks {
   // Collaborator authorization / sharing / permission logic. Memoized for the DO instance.
   // Resolving the owner's profile ID may require an RPC on first use; thereafter it's cached.
   async getSharingManager(): Promise<SharingManager> {
+    this.assertInstallReady();
     if (!this.#sharingManager) {
       this.#sharingManager = new SharingManager(this.storage, await this.getOwnerProfileId());
     }
@@ -10772,6 +10791,96 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     this.impl = new OverseerImpl(ctx, env);
   }
 
+  /** Private, new-only initialization. No open, ambient provisioning, opt-in, or publication. */
+  async initializeDeploymentInstallQuarantine(ticket: InstallQuarantineTicket): Promise<{workpieceId: number}> {
+    // Capture a value copy even on local calls. All admission checks also run on every retry.
+    ticket = structuredClone(ticket);
+    if (ticket.workspaceId !== this.ctx.id.toString() || !/^[a-f0-9]{64}$/.test(ticket.ownerId) ||
+        !/^[a-f0-9-]{36}$/.test(ticket.attempt) || !/^[a-f0-9-]{36}$/.test(ticket.session) ||
+        !/^[a-f0-9]{64}$/.test(ticket.digest) || !ticket.incarnation ||
+        ticket.principal.length > 254 || !Number.isSafeInteger(ticket.expiresAt) ||
+        ticket.expiresAt <= Date.now() || ticket.expiresAt > Date.now() + 60_000) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    // Serialize local git writes and cleanup. Catch inside the input gate: ordinary refusal must
+    // not reset the DO. User remains reentrant, so cancellation there fences our last callback.
+    const result = await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        if (ticket.expiresAt <= Date.now()) throw new Error('Installation attempt is unavailable.');
+        let record = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+        if (record && (JSON.stringify(record.ticket) !== JSON.stringify(ticket) || record.state === 'cancelled')) {
+          throw new Error('Installation attempt is unavailable.');
+        }
+        if (!record) {
+          if (this.impl.ownerId || Array.from(this.impl.storage.gadgets.list({limit: 1})).length) {
+            throw new Error('Installation target is not new.');
+          }
+          record = {ticket, state: 'initializing'};
+          this.ctx.storage.kv.put(INSTALL_QUARANTINE_KEY, record);
+        }
+        // Destination owns expiry cleanup before any cross-DO/publisher/init work, even if User
+        // storage is reset or the initiating RPC disappears. No permanent per-click tombstone.
+        await this.impl.updateSharedAlarm();
+        const users = this.ctx.exports.UserDurableObject;
+        const owner = users.get(users.idFromString(ticket.ownerId));
+        await owner.checkDeploymentInstallTarget(ticket);
+        if (record.state === 'initialized' && record.workpieceId !== undefined) {
+          if (ticket.expiresAt <= Date.now()) throw new Error('Installation attempt is unavailable.');
+          return {workpieceId: record.workpieceId};
+        }
+        const publisher = this.env.MILESVAULT_DOCTOR_APP;
+        const release = await publisher?.getDeploymentInstallRelease();
+        if (!publisher || !release || await deploymentInstallReleaseDigest(release) !== ticket.digest) {
+          throw new Error('Installation snapshot is unavailable.');
+        }
+        const snapshot = await validateDeploymentInstallSnapshot(
+          await publisher.getDeploymentInstallSnapshot(ticket.digest), release);
+        const profile = await owner.whoami();
+        const commitId = await this.impl.gitStore.writeFilesAsCommit(new Map(Object.entries(snapshot.files)), {
+          parents: [], author: commitIdentityForAuthor(profile), message: `Instantiate blueprint: ${snapshot.title}`,
+          timestamp: new Date(ticket.expiresAt - 60_000),
+        });
+        await owner.checkDeploymentInstallTarget(ticket);
+        if (ticket.expiresAt <= Date.now()) throw new Error('Installation attempt is unavailable.');
+        // Synchronous destination commit after the last remote check. Quarantine remains closed
+        // regardless of a subsequent identity/cancel race; no controls marker or READ fallback.
+        this.impl.ownerId = ticket.ownerId;
+        this.impl.storage.ownerId.put(ticket.ownerId);
+        this.#initializeNewWorkspace();
+        this.impl.storage.title.put(snapshot.title);
+        this.impl.storage.prohibitAllSharing.put(true);
+        this.impl.ensureDefaultGadget(commitId);
+        const gadget = this.impl.getGadgetRecord(this.impl.resolveGadgetId(undefined));
+        gadget.output = {id: snapshot.output.id, noun: snapshot.output.title,
+          plural: snapshot.output.title, icon: 'appWindow'};
+        this.impl.storage.gadgets.put(gadget);
+        this.ctx.storage.kv.put(INSTALL_QUARANTINE_KEY, {ticket, state: 'initialized', workpieceId: gadget.id});
+        return {workpieceId: gadget.id};
+      } catch {
+        return undefined;
+      }
+    });
+    if (!result) throw new Error('Installation attempt is unavailable.');
+    return result;
+  }
+
+  /** Close-only ACK. Keeps a temporary deadline fence against delayed first admission/retries. */
+  async cancelDeploymentInstallQuarantine(ticket: InstallQuarantineTicket): Promise<void> {
+    await this.ctx.blockConcurrencyWhile(async () => {
+      const record = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+      if (ticket.workspaceId !== this.ctx.id.toString() ||
+          (record ? JSON.stringify(record.ticket) !== JSON.stringify(ticket) : !!this.impl.ownerId)) {
+        throw new Error('Installation cleanup is unavailable.');
+      }
+      await this.ctx.storage.deleteAll();
+      if (ticket.expiresAt > Date.now()) {
+        this.ctx.storage.kv.put(INSTALL_QUARANTINE_KEY, {ticket, state: 'cancelled'});
+      }
+      this.impl = new OverseerImpl(this.ctx, this.env);
+      await this.impl.updateSharedAlarm();
+    });
+  }
+
   /**
    * The alarm handler kicks in when we've had running agents that haven't completed for at least a
    * minute. This serves a few purposes:
@@ -10784,6 +10893,15 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
    *   the agents yet again.
    */
   async alarm() {
+    const quarantine = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+    if (quarantine) {
+      if (quarantine.ticket.expiresAt > Date.now()) {
+        await this.impl.updateSharedAlarm();
+      } else {
+        await this.cancelDeploymentInstallQuarantine(quarantine.ticket);
+      }
+      return;
+    }
     // Cleanup must progress even while a live agent holds the legacy keepalive waiter.
     await this.impl.serviceUsageAlarm();
     if (this.impl.hasRunningAgents) {
@@ -10818,6 +10936,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
    * index. Null unless the caller really is the owner, so nobody else can read the snapshot.
    */
   async getOutputsForOwnerBackfill(ownerId: string): Promise<WorkspaceOutputEntry[] | null> {
+    this.impl.assertInstallReady();
     if (this.impl.ownerId !== ownerId) return null;
     return this.impl.outputsSnapshot();
   }
@@ -10921,6 +11040,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
    * Not on OverseerApi/GadgetClient, and never called by READ provisioning or migration.
    */
   async optInDoctorControls(ownerId: string, gadgetId: WorkpieceId, uiSha256: string): Promise<void> {
+    this.impl.assertInstallReady();
     if (!ownerId || ownerId !== this.impl.ownerId || !/^[a-f0-9]{64}$/.test(uiSha256)) throw new Error("Invalid Doctor controls consent.");
     const gadget = this.impl.getGadgetRecord(gadgetId);
     const edge = gadget.bindings.DOCTOR;
@@ -10939,6 +11059,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
 
   /** Only trusted blueprint creation may initialize this private, owner-key-bound read output. */
   async configureDoctorReadOutput(ownerId: string, ledgerKey: string, initialize = false): Promise<void> {
+    this.impl.assertInstallReady();
     if (this.impl.ownerId !== ownerId) return;
     const gadgets = [...this.impl.storage.gadgets.list()].filter((g): g is GadgetRecord => g.type === "gadget" && g.output?.id === "doctor");
     if (!gadgets.length) return;
@@ -11021,6 +11142,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
              notifyClosed: NativeRpcStub<() => void>,
              shareKey?: string,
              configureObservers?: RpcStub<ObserverConfigCallback>): Promise<Overseer> {
+    this.impl.assertInstallReady();
     let firstOpen = !this.impl.ownerId;
     if (firstOpen) {
       // This Overseer hasn't been initialized yet.
@@ -11335,6 +11457,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   async initializeFromBlueprint(code: Uint8Array, title: string, output?: BlueprintOutput,
                                 systemOutput?: "ledger")
       : Promise<void> {
+    this.impl.assertInstallReady();
     // Set the title. The default gadget (created below) inherits it.
     this.impl.storage.title.put(title);
 
@@ -11555,6 +11678,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   }
 
   [restore](params: OverseerRestoreParams): any {
+    this.impl.assertInstallReady();
     return this.impl.restore(params);
   }
 }
@@ -12156,6 +12280,7 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
   }
 
   async getGadget(id: WorkpieceId): Promise<RpcStub<GadgetClient>> {
+    this.impl.assertInstallReady();
     this.impl.getGadgetRecord(id);  // validate it exists
     // @ts-expect-error An RpcTarget implementing the interface works in place of a stub, but the
     //     type system doesn't know this.
@@ -13599,6 +13724,7 @@ class UseOverseerInterface extends RpcTarget implements Overseer {
   }
 
   async getGadget(id: WorkpieceId): Promise<RpcStub<GadgetClient>> {
+    this.impl.assertInstallReady();
     if (this.impl.getGadgetRecord(id).pending) {  // also validates it exists
       throw new Error(`No such gadget: ${id}`);
     }
@@ -13796,6 +13922,7 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
   #controlUiSha256?: string;
 
   async getUiBundle(chatId?: number): Promise<UiBundle | null> {
+    this.impl.assertInstallReady();
     this.#controlUiSha256 = undefined;
     const pin = this.impl.getGadgetRecord(this.id).doctorControls?.uiSha256;
     const bundle = await this.impl.getPrivateControlUi(this.id, this.clientUserId) ?? await this.impl.getGadgetUiBundle(this.id, chatId);
@@ -13806,6 +13933,7 @@ class GadgetClientImpl extends RpcTarget implements GadgetClient {
   }
 
   async connectToGadget(chatId?: number): Promise<RpcStub<any>> {
+    this.impl.assertInstallReady();
     this.impl.recordGadgetAnalytics({
       event_name: "gadget_interaction",
       user_id: this.#clientUser.id.toString(),

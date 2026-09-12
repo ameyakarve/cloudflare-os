@@ -2,7 +2,8 @@ import { newWorkersRpcResponse } from "./rpc-session.js";
 import { deploymentAccessEnabled, DeploymentAccessError, readDeploymentAccess, watchDeploymentAccess } from "./deployment-access.js";
 import { RpcStub, RpcTarget } from "capnweb";
 import { validateRpc, skipRpcValidation } from "capnweb-validate";
-import { deploymentInstallReleaseDigest } from '@gadgets/workshop-shared/deployment-install';
+import { stageDeploymentInstallQuarantine } from './deployment-install-quarantine.js';
+import { deploymentInstallReleaseDigest, validateDeploymentInstallRelease } from '@gadgets/workshop-shared/deployment-install';
 import type { DeploymentInstallPreparation, DeploymentInstallResult } from '@gadgets/workshop-shared/deployment-install';
 import type { JWTPayload } from "jose";
 import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
@@ -78,6 +79,9 @@ type Env = Cloudflare.Env & {
 
 // =======================================================================================
 
+/** Kernel-local staging shape derived from the actual root, never part of the public RPC API. */
+export type DeploymentInstallQuarantineRoot = Pick<AuthenticatedApiImpl, typeof stageDeploymentInstallQuarantine>;
+
 @validateRpc()
 class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   constructor(private ctx: ExecutionContext, private env: Env,
@@ -90,6 +94,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     this.overseers = this.ctx.exports.OverseerDurableObject;
     this.adminSettings = this.ctx.exports.AdminSettings;
     this.users = this.ctx.exports.UserDurableObject;
+    sessionSignal?.addEventListener('abort', this.#installAbort, {once: true});
   }
 
   private overseers: DurableObjectNamespace<OverseerDurableObject>;
@@ -99,6 +104,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   #userId: DurableObjectId;
   #installSession = crypto.randomUUID();
   #installClosed = false;
+  #installAbort = () => this[Symbol.dispose]();
   // Root cancellation fence only; User identity incarnation is independently durable.
   #installGeneration = 0;
   #installPreparation?: DeploymentInstallPreparation;
@@ -113,12 +119,13 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   async #readInstallRelease() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
+      const release = await Promise.race([
         this.env.MILESVAULT_DOCTOR_APP?.getDeploymentInstallRelease(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error('Installation release is unavailable.')), 5_000);
         }),
       ]);
+      return release && validateDeploymentInstallRelease(release);
     } finally { clearTimeout(timer); }
   }
 
@@ -208,6 +215,36 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
     throw new Error('Installation is not available yet. No app was created.');
   }
 
+  // Own symbol property: not a Cap'n Web prototype/string method. Only kernel-local tests/code
+  // can stage this leg; public confirm above cannot reach it, and it cannot publish or opt in.
+  [stageDeploymentInstallQuarantine] = async (attempt: string) => {
+    const generation = this.#installGeneration;
+    this.#checkInstallLive(generation);
+    const prepared = this.#installPreparation;
+    if (!prepared || prepared.attempt !== attempt) throw new Error('Installation attempt is unavailable.');
+    try {
+      const digest = await deploymentInstallReleaseDigest(prepared.release);
+      const current = await this.#readInstallRelease();
+      if (!current || await deploymentInstallReleaseDigest(current) !== digest) {
+        throw new Error('Installation attempt is unavailable.');
+      }
+      this.#checkInstallLive(generation);
+      await readDeploymentAccess(this.env, prepared.principal);
+      this.#checkInstallLive(generation);
+      const target = await this.#user.stageDeploymentInstallAttempt(
+        this.#installSession, attempt, digest, prepared.principal);
+      await readDeploymentAccess(this.env, prepared.principal);
+      await this.#user.checkDeploymentInstallAttempt(this.#installSession, attempt, digest, prepared.principal);
+      this.#checkInstallLive(generation);
+      if (Date.now() >= prepared.expiresAt) throw new Error('Installation attempt is unavailable.');
+      return target;
+    } catch {
+      // An ambiguous init reply is retryable against the durable exact target, not cancellation.
+      // Abort/disposal explicitly close the slot; destination expiry also owns orphan cleanup.
+      throw new Error('Installation attempt is unavailable.');
+    }
+  };
+
   @skipRpcValidation()
   async cancelDeploymentInstall(...args: [string]): Promise<void> {
     if (args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 128) {
@@ -219,6 +256,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   [Symbol.dispose]() {
+    this.sessionSignal?.removeEventListener('abort', this.#installAbort);
     this.#installClosed = true;
     ++this.#installGeneration;
     const prepared = this.#installPreparation;
