@@ -1,8 +1,8 @@
 /** GENERATED ONLY by M/scripts/generate-os-native-post-contract.mjs. No authority.
- * Contract sha256:04ac6f1bbc35827de562c73b86bd8ad8601ce0658f4ab793f2526c132e3de9f5
+ * Contract sha256:8c3b6fb50f5e6a445105cd4542cf97d5bbd65afb6e0291bc5e05f6fb62b2a6fe
  * package.json sha256:611c5f95aedf498d00bb1f9d315920f2054c899f37bd9ca83131d6aa7e54244d
  * pnpm-lock.yaml sha256:259507bf9e5bc30fb2d70edbd90c021eab2f1981c786c6fc8b2d4a6f6150177d
- * scripts/generate-os-native-post-contract.mjs sha256:bb815b3478a3fe4dd71a0d90b2405615bbd01f4811196d363b04e8c4a489a746
+ * scripts/generate-os-native-post-contract.mjs sha256:aa22ae82b8feae388157460ae3c97c51227cda3ef1e0c8d67afa03eab751e540
  * scripts/os-native-post-source-closure.json sha256:883f96d9bc6637080568cba3137495316683f86cc98a65a07790209f78f21ef5
  * src/durable/agent-prompt/index.ts sha256:6dd262e1b4a2823cff6bafb7ed95d0fb95199e3111f9e8f17951a817e0777eee
  * src/durable/agent-prompt/inline.generated.ts sha256:5234735a527a19f13184714b77f5e639bc77a8cecf8b3c0c49eeae5d43cee84b
