@@ -66,6 +66,10 @@ declare global {
       DEPLOYMENT_ACCESS_POLICY?: Service<import("@gadgets/workshop-shared/deployment-access").DeploymentAccessPolicy>;
       DEPLOYMENT_ACCESS_REQUIRED?: string;
       DEPLOYMENT_USAGE_POLICY?: Service<import("@gadgets/workshop-shared/deployment-usage").DeploymentUsagePolicy>;
+      /** Current private V2 route. Stored obligations retain their original binding name. */
+      DEPLOYMENT_USAGE_V2_ROUTE?: string;
+      /** Retain old named bindings until their obligations drain; missing routes fail closed. */
+      [route: `DEPLOYMENT_USAGE_V2_ROUTE_${string}`]: Service<import("@gadgets/workshop-shared/os-usage.generated").OsUsagePolicyApi> | undefined;
       DEPLOYMENT_USAGE_REQUIRED?: string;
       /** Trusted versioned specialist JSON or @chunks:N manifest. Omit to disable delegation. */
       DEPLOYMENT_SPECIALISTS?: string;

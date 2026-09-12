@@ -1,6 +1,6 @@
 /**
- * Usage-only durable caller journal checkpoint. Not wired to User/Overseer yet and not authority.
- * The transport adapter must derive/validate tickets and terminal proofs from the real M contract.
+ * Usage-only durable caller journal. User V2 owns the transport; Overseer is not wired yet.
+ * Journal records are not authority. The transport validates proofs from the generated M contract.
  * Opaque ticket bytes here are the complete serialized ticket, never an RPC interface mirror.
  */
 const SLOT_COUNT = 20; // M OS_MAX_CONCURRENT_RUNS: existing supported maximum, not a quota.
@@ -57,7 +57,8 @@ function timestamp(now: number) {
  * The owning DO must run recover() on wake and merge nextAlarm() into its shared alarm scheduler.
  */
 export class UsageAcquisitionJournal {
-  constructor(private readonly storage: DurableObjectStorage) {
+  constructor(private readonly storage: DurableObjectStorage,
+      private readonly schedule: (operation: () => Promise<void>) => Promise<void> = operation => operation()) {
     storage.transactionSync(() => {
       storage.sql.exec(`CREATE TABLE IF NOT EXISTS usage_caller_slots_v2 (
         slot INTEGER PRIMARY KEY CHECK(slot >= 0 AND slot < 20),
@@ -230,10 +231,12 @@ export class UsageAcquisitionJournal {
 
   /** Publish storage/alarm before any remote side effect. Never postpone another subsystem's alarm. */
   async arm(): Promise<void> {
-    const due = this.nextAlarm();
-    if (due === undefined) return;
-    const existing = await this.storage.getAlarm();
-    if (existing === null || due < existing) await this.storage.setAlarm(due);
+    await this.schedule(async () => {
+      const due = this.nextAlarm();
+      if (due === undefined) return;
+      const existing = await this.storage.getAlarm();
+      if (existing === null || due < existing) await this.storage.setAlarm(due);
+    });
   }
 
   /**

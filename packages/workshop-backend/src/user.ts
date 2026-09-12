@@ -1,3 +1,6 @@
+import {UserUsageV2} from './user-usage-v2.js';
+import type {UsageReceiverTicket} from './usage-acquisition-receiver.js';
+import type {UsageGrant} from '@gadgets/workshop-shared/deployment-usage';
 import { boundedUsageAcquisition, deploymentUsageEnabled, DeploymentUsageError, DeploymentUsageRunImpl } from "./deployment-usage.js";
 import { readDeploymentAccess } from "./deployment-access.js";
 import type { DeploymentAccessGrant } from "@gadgets/workshop-shared/deployment-access";
@@ -317,7 +320,42 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     this.adminSettings = this.ctx.exports.AdminSettings;
 
     this.vendors = buildGatekeeperVendorMap(env);
+    // Ordinary V1 Users do not initialize V2 tables. Wake owns interrupted cleanup, not handoff.
+    if (ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE name = 'usage_caller_slots_v2'").toArray().length) {
+      ctx.blockConcurrencyWhile(() => this.usageV2().wake());
+    }
   }
+
+  private usageOwnerV2?: UserUsageV2;
+  private usageV2() {
+    return this.usageOwnerV2 ??= new UserUsageV2(this.ctx, () => {
+      const identity = this.storage.deploymentIdentity.get();
+      if (!identity) return undefined;
+      let incarnation = this.ctx.storage.kv.get<string>('usage-identity-v2');
+      if (!incarnation) this.ctx.storage.kv.put('usage-identity-v2', incarnation = crypto.randomUUID());
+      return {owner: this.ctx.id.toString(), key: identity.storageKey, incarnation, deployment: this.env.DEPLOYMENT_USAGE_V2_ROUTE};
+    }, (deployment = this.env.DEPLOYMENT_USAGE_V2_ROUTE) => {
+      if (!deployment?.startsWith('DEPLOYMENT_USAGE_V2_ROUTE_')) return undefined;
+      const policy = this.env[deployment as `DEPLOYMENT_USAGE_V2_ROUTE_${string}`];
+      return policy ? {deployment, policy} : undefined;
+    }, key => readDeploymentAccess(this.env, key));
+  }
+
+  /** Private payload-free receiver snapshot; no browser capability exposes this method. */
+  readUsageAcquisitionSlotsV2() { return this.usageV2().read(); }
+  /** Private fixed-window acquisition; returns pending data, never a usable run. */
+  beginDeploymentUsageAcquisitionV2(ticket: UsageReceiverTicket) { return this.usageV2().begin(ticket); }
+  /** Private adoption of the exact host ticket, followed by durable M activation. */
+  adoptDeploymentUsageAcquisitionV2(ticket: UsageReceiverTicket) { return this.usageV2().adopt(ticket); }
+  /** Close-only private cancellation works without renewed role authority. */
+  cancelDeploymentUsageAcquisitionV2(ticket: UsageReceiverTicket) { return this.usageV2().cancel(ticket); }
+  /** Recovery information only; status never mints a root. */
+  getDeploymentUsageAcquisitionStatusV2(ticket: UsageReceiverTicket) { return this.usageV2().status(ticket); }
+  /** Explicit lookup-only V2 resume; V1 resume is unchanged. */
+  resumeDeploymentUsageRunV2(ticket: UsageReceiverTicket, expected: UsageGrant) { return this.usageV2().resume(ticket, expected); }
+  /** User had no alarm handler; V2 preserves earlier shared alarms and does not delete them. */
+  async alarm() { if (this.usageOwnerV2) await this.usageOwnerV2.alarm(); }
+
 
   async authenticate(token: string): Promise<void> {
     let tokenBytes: Uint8Array;
@@ -382,6 +420,8 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   /** Begin a quota run for this stored identity. This private DO method is not browser API. */
   async beginDeploymentUsageRun(existingRunId?: string) {
     if (!deploymentUsageEnabled(this.env)) return undefined;
+    // Legacy IDs retain legacy behavior. V2 IDs must use exact-ticket, adopted-only V2 resume.
+    if (existingRunId && this.usageOwnerV2?.ownsRun(existingRunId)) throw new DeploymentUsageError();
     await this.getDeploymentAccessGrant();
     const key = this.storage.deploymentIdentity.get()?.storageKey;
     const policy = this.env.DEPLOYMENT_USAGE_POLICY;
@@ -404,7 +444,17 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     if (existing && existing.storageKey !== identity.storageKey) {
       throw new Error("The canonical identity for this account cannot be changed implicitly.");
     }
+    if (existing?.subject !== identity.subject || existing?.storageKey !== identity.storageKey) {
+      // Never erase retained original routes. A→B→A cannot revive an old continuation.
+      this.ctx.storage.kv.put('usage-identity-v2', crypto.randomUUID());
+      if (this.usageOwnerV2) {
+        for (const record of this.usageOwnerV2.journal.records()) this.usageOwnerV2.journal.close(record, Date.now());
+      }
+    }
+    // Publish the new identity without yielding after its incarnation/closure fence. Otherwise a
+    // concurrent begin could capture the new incarnation with the old identity during cleanup.
     this.storage.deploymentIdentity.put(identity);
+    if (this.usageOwnerV2) await this.usageOwnerV2.alarm();
     for (let record of this.#connectedAccountRecords()) {
       let provider = accountProvider(this.env, record.vendorId);
       if (!provider || record.deploymentStorageKey === identity.storageKey) continue;
