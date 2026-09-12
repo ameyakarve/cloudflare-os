@@ -4,6 +4,63 @@ import { runInDurableObject } from 'cloudflare:test';
 import { expect, it } from 'vitest';
 import type { OverseerDurableObject } from '../src/overseer';
 import { exposeGatekeeperToAgent } from '../src/managed-output-boundary';
+import type { DeploymentUsageRun, UsageGrant } from '@gadgets/workshop-shared/deployment-usage';
+
+it('private human queue preserves native run methods and cleans up a post-acquisition Stop', async () => {
+  await runInDurableObject(env.TEST_OVERSEER.getByName('doctor-native-budget'), async instance => {
+    const impl = instance['impl'];
+    const owner = impl.users.idFromName('native-budget-owner').toString();
+    impl.ownerId = owner;
+    impl.storage.gadgets.put({type:'gadget',id:3,title:'Doctor',created:new Date(0),bindingName:'DOCTOR',bindings:{},output:{id:'doctor',noun:'Doctor',plural:'Doctor views',icon:'table'}});
+    await instance.configureDoctorReadOutput(owner, 'Native@example.test', true);
+    const source = 'immutable native budget fixture';
+    let retained: RpcStub<DoctorHumanQueue> | undefined;
+    let finishes = 0, stopAfterAcquisition = false;
+    const grant: UsageGrant = {allowed:true,runId:'native-only-regression',expiresAt:Date.now()+60000};
+    class Run extends RpcTarget implements DeploymentUsageRun {
+      async getGrant() { return grant; }
+      async reserve() { return 'receipt'; }
+      async settleTokens() {}
+      async finish() { finishes++; }
+    }
+    using run = new RpcStub(new Run());
+    const prior = {app: impl.env.MILESVAULT_DOCTOR_APP, budget: impl.getUsageBudget};
+    Object.assign(impl.env, {MILESVAULT_DOCTOR_APP: {
+      async getDoctorControlUi() { return {jsCode:source}; },
+      async openDoctorControlsV1(_key: string, queue: RpcStub<DoctorHumanQueue>) {
+        retained = queue.dup();
+        return new RpcStub(new RpcTarget());
+      },
+    }});
+    // Only the upstream budget is synthetic. The real owner factory, both decorated queue
+    // adapters, and native workerd RPC transport are used, not an undecorated lookalike.
+    impl.getUsageBudget = async () => {
+      if (stopAfterAcquisition) await impl.cancelAgent(999).catch(() => {});
+      return run.dup();
+    };
+    try {
+      await instance.optInDoctorControls(owner, 3, await doctorControlUiHash(source));
+      using _session = await impl.getGadgetUiSession(3, undefined, undefined, owner);
+      using budget = await retained!.getUsageBudget();
+      expect(budget).toBeDefined();
+      expect(await budget!.getGrant()).toEqual(grant);
+      expect(await budget!.reserve({capabilityCalls:1})).toBe('receipt');
+      await budget!.settleTokens('receipt', 0);
+      await budget!.finish();
+      expect(finishes).toBe(1);
+      // Argument validation on the other override must remain enabled.
+      await expect((async () => await retained!.authorizeObservation({title: 7} as never))()).rejects.toThrow();
+      stopAfterAcquisition = true;
+      await expect((async () => await retained!.getUsageBudget())()).rejects.toThrow('identity or Stop epoch');
+      expect(finishes).toBe(2);
+      await expect((async () => await retained!.getUsageBudget())()).rejects.toThrow('identity or Stop epoch');
+      expect(finishes).toBe(2); // pre-check prevents another acquisition
+    } finally {
+      retained?.[Symbol.dispose]();
+      impl.env.MILESVAULT_DOCTOR_APP = prior.app; impl.getUsageBudget = prior.budget;
+    }
+  });
+});
 
 it('mints the human guard only through the owner browser route and revokes it on binding change and Stop', async () => {
   const overseer = env.TEST_OVERSEER.getByName('doctor-human-factory');
@@ -33,14 +90,14 @@ it('mints the human guard only through the owner browser route and revokes it on
       const bundle = await impl.getPrivateControlUi(3, owner);
       expect(bundle?.jsCode.endsWith('immutable fixture, not saved source')).toBe(true);
       expect(bundle?.jsCode).not.toBe('immutable fixture, not saved source'); // Includes the standard React/GadgetUI runtime.
-      using session = await impl.getGadgetUiSession(3, undefined, undefined, owner);
+      using _session = await impl.getGadgetUiSession(3, undefined, undefined, owner);
       await retained!.checkActive();
       await instance.configureDoctorReadOutput(owner, 'member@example.com');
       await expect((async()=>await retained!.checkActive())()).rejects.toThrow('identity or Stop epoch');
       await instance.configureDoctorReadOutput(owner, 'Member@example.com');
       await expect((async()=>await retained!.checkActive())()).rejects.toThrow('identity or Stop epoch');
       retained![Symbol.dispose](); retained = undefined;
-      using second = await impl.getGadgetUiSession(3, undefined, undefined, owner);
+      using _second = await impl.getGadgetUiSession(3, undefined, undefined, owner);
       await retained!.checkActive();
       // The actual host Stop entry invalidates UI authority even if no agent is live.
       await impl.cancelAgent(999).catch(() => {});
@@ -84,11 +141,11 @@ it('actual owner host retains saved READ bundle/session by default and requires 
       using host = await instance.open(owner, 'release-owner@example.test', notify);
       using client = await host.getGadget(3);
       expect((await client.getUiBundle())?.jsCode.endsWith(source)).toBe(true);
-      using oldSession = await client.connectToGadget();
+      using _oldSession = await client.connectToGadget();
       expect(opens).toBe(0);
       impl.env.MILESVAULT_DOCTOR_APP = undefined;
       expect((await client.getUiBundle())?.jsCode.endsWith(source)).toBe(true);
-      using absentServiceSession = await client.connectToGadget();
+      using _absentServiceSession = await client.connectToGadget();
       expect(opens).toBe(0);
       expect(JSON.stringify(impl.storage.gadgets.get(3))).toBe(saved);
       await expect(instance.optInDoctorControls('not-owner', 3, await doctorControlUiHash(newSource))).rejects.toThrow('consent');
@@ -100,7 +157,7 @@ it('actual owner host retains saved READ bundle/session by default and requires 
       reads = 0;
       expect((await client.getUiBundle())?.jsCode.endsWith(newSource)).toBe(true);
       expect(reads).toBe(0);
-      using controls = await client.connectToGadget(); expect(opens).toBe(1);
+      using _controls = await client.connectToGadget(); expect(opens).toBe(1);
       Object.assign(impl.env, {MILESVAULT_DOCTOR_APP: {...app, getDoctorControlUi: async () => ({jsCode: 'new deployment bytes'})}});
       await expect(client.getUiBundle()).rejects.toThrow('Pinned');
       Object.assign(impl.env, {MILESVAULT_DOCTOR_APP: app});

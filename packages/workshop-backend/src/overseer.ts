@@ -255,6 +255,9 @@ class PrivateHumanQueueAdapter extends LedgerApplicationQueueAdapter implements 
   override async authorizeObservation(description: ObservationDescription) {
     await this.check(); await super.authorizeObservation(description); await this.check();
   }
+  // Like ApprovalQueueImpl, return the native stub unchanged: validation would project away
+  // its remote methods. This no-argument method retains both active checks and failed-check cleanup.
+  @skipRpcValidation()
   override async getUsageBudget(): Promise<DeploymentUsageRun | undefined> {
     await this.check();
     const run = await super.getUsageBudget();
