@@ -1,5 +1,5 @@
 import { INSTALL_QUARANTINE_KEY, type InstallQuarantineRecord, type InstallQuarantineTicket } from './deployment-install-quarantine.js';
-import { validateDeploymentInstallSnapshot, deploymentInstallReleaseDigest } from '@gadgets/workshop-shared/deployment-install';
+import { validateDeploymentInstallSnapshot, deploymentInstallReleaseDigest, validateDeploymentInstallRelease } from '@gadgets/workshop-shared/deployment-install';
 import { OverseerUsageLifecycle } from './overseer-usage-lifecycle.js';
 import { OverseerUsageAcquisition, type UsageExecution } from './overseer-usage-acquisition.js';
 import type { UsageReceiverTicket } from './usage-acquisition-receiver.js';
@@ -1949,9 +1949,10 @@ class OverseerImpl implements AgentHooks {
     return ctx;
   }
 
-  /** Marker absence preserves legacy behavior; no state in this leg releases quarantine. */
+  /** Installed targets retain a permanent marker: incomplete states never fall back to saved code. */
   assertInstallReady(): void {
-    if (this.ctx.storage.kv.get(INSTALL_QUARANTINE_KEY)) {
+    const record = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+    if (record && record.state !== 'published') {
       throw new Error('Installation workspace is quarantined.');
     }
   }
@@ -2132,7 +2133,7 @@ class OverseerImpl implements AgentHooks {
   // Sole host alarm writer. Recompute inside the input gate, including after awaited writes.
   async updateSharedAlarm(): Promise<void> {
     const quarantine = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
-    if (quarantine) {
+    if (quarantine && quarantine.state !== 'published') {
       await this.ctx.storage.setAlarm(quarantine.ticket.expiresAt);
       return;
     }
@@ -10824,7 +10825,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
         const users = this.ctx.exports.UserDurableObject;
         const owner = users.get(users.idFromString(ticket.ownerId));
         await owner.checkDeploymentInstallTarget(ticket);
-        if (record.state === 'initialized' && record.workpieceId !== undefined) {
+        if (['initialized', 'ready', 'published'].includes(record.state) && record.workpieceId !== undefined) {
           if (ticket.expiresAt <= Date.now()) throw new Error('Installation attempt is unavailable.');
           return {workpieceId: record.workpieceId};
         }
@@ -10864,6 +10865,67 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return result;
   }
 
+  /** New-only binding and pin while still quarantined. Idempotent; no operation/session/budget. */
+  async readyDeploymentInstallQuarantine(ticket: InstallQuarantineTicket) {
+    const result = await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        const record = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+        if (!record || JSON.stringify(record.ticket) !== JSON.stringify(ticket) ||
+            !['initialized', 'ready'].includes(record.state) || record.workpieceId === undefined) {
+          throw new Error('Installation attempt is unavailable.');
+        }
+        const users = this.ctx.exports.UserDurableObject;
+        const owner = users.get(users.idFromString(ticket.ownerId));
+        await owner.checkDeploymentInstallTarget(ticket);
+        const raw = await this.env.MILESVAULT_DOCTOR_APP?.getDeploymentInstallRelease();
+        const release = raw && validateDeploymentInstallRelease(raw);
+        if (!release || await deploymentInstallReleaseDigest(release) !== ticket.digest) {
+          throw new Error('Installation release is unavailable.');
+        }
+        await owner.checkDeploymentInstallTarget(ticket);
+        if (ticket.expiresAt <= Date.now()) throw new Error('Installation attempt is unavailable.');
+        this.#configureDoctorReadOutput(ticket.ownerId, ticket.principal, true, true);
+        this.#optInDoctorControls(ticket.ownerId, record.workpieceId, release.uiSha256);
+        this.ctx.storage.kv.put(INSTALL_QUARANTINE_KEY, {...record, state: 'ready',
+          releaseId: release.releaseId, uiSha256: release.uiSha256});
+        return {workpieceId: record.workpieceId, releaseId: release.releaseId, title: this.impl.storage.title.get()};
+      } catch { return undefined; }
+    });
+    if (!result) throw new Error('Installation readiness is unavailable.');
+    return result;
+  }
+
+  /** Lookup-only completion after a durable User commit, including lost final replies/reopen.
+   * The marker is retained forever with the installed workspace, never removed into legacy mode.
+   */
+  async resolveDeploymentInstallReady(ownerId: string): Promise<void> {
+    const record = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+    if (!record) return;
+    if (record.ticket.ownerId !== ownerId || !['ready', 'published'].includes(record.state)) {
+      throw new Error('Installation workspace is quarantined.');
+    }
+    const users = this.ctx.exports.UserDurableObject;
+    const owner = users.get(users.idFromString(ownerId));
+    const result = await owner.resolveDeploymentInstallPublication(record.ticket);
+    if (!result || result.workspaceId !== this.ctx.id.toString() || result.workpieceId !== record.workpieceId ||
+        result.releaseId !== record.releaseId) throw new Error('Installation workspace is quarantined.');
+    await owner.getDeploymentAccessGrant();
+    if (await owner.getDeploymentInstallIncarnation(record.ticket.principal) !== record.ticket.incarnation) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    const current = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+    if (!current || JSON.stringify(current.ticket) !== JSON.stringify(record.ticket) ||
+        !['ready', 'published'].includes(current.state)) throw new Error('Installation workspace is quarantined.');
+    const gadget = this.impl.getGadgetRecord(result.workpieceId);
+    const binding = this.impl.storage.gatekeepers.get(gadget.bindings.DOCTOR?.target)?.systemResource;
+    if (this.impl.ownerId !== ownerId || gadget.output?.id !== 'doctor' || gadget.doctorControls?.ownerId !== ownerId ||
+        gadget.doctorControls.version !== 1 || gadget.doctorControls.uiSha256 !== record.uiSha256 || !gadget.privateReadOutput ||
+        binding?.type !== 'doctorRead' || binding.identityKey !== record.ticket.principal ||
+        !this.impl.storage.prohibitAllSharing.get()) throw new Error('Installation readiness is unavailable.');
+    this.ctx.storage.kv.put(INSTALL_QUARANTINE_KEY, {...current, state: 'published'});
+    await this.impl.updateSharedAlarm();
+  }
+
   /** Close-only ACK. Keeps a temporary deadline fence against delayed first admission/retries. */
   async cancelDeploymentInstallQuarantine(ticket: InstallQuarantineTicket): Promise<void> {
     await this.ctx.blockConcurrencyWhile(async () => {
@@ -10871,6 +10933,13 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
       if (ticket.workspaceId !== this.ctx.id.toString() ||
           (record ? JSON.stringify(record.ticket) !== JSON.stringify(ticket) : !!this.impl.ownerId)) {
         throw new Error('Installation cleanup is unavailable.');
+      }
+      // Published/provisioned targets must never use quarantine's blanket SQL deletion. The
+      // User close decision excludes a commit racing this cleanup, including a lost commit reply.
+      if (record?.state === 'published') return;
+      const users = this.ctx.exports.UserDurableObject;
+      if (await users.get(users.idFromString(ticket.ownerId)).resolveDeploymentInstallPublication(ticket, true)) {
+        return;
       }
       await this.ctx.storage.deleteAll();
       if (ticket.expiresAt > Date.now()) {
@@ -10894,7 +10963,17 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
    */
   async alarm() {
     const quarantine = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
-    if (quarantine) {
+    if (quarantine && quarantine.state !== 'published') {
+      if (quarantine.state === 'ready') {
+        const users = this.ctx.exports.UserDurableObject;
+        if (await users.get(users.idFromString(quarantine.ticket.ownerId)).resolveDeploymentInstallPublication(quarantine.ticket)) {
+          // Commit won: preserve content even if authority is now revoked. Ordinary lifecycle
+          // owns this workspace; do not repeatedly schedule the expired quarantine deadline.
+          this.ctx.storage.kv.put(INSTALL_QUARANTINE_KEY, {...quarantine, state: 'published'});
+          await this.impl.updateSharedAlarm();
+          return;
+        }
+      }
       if (quarantine.ticket.expiresAt > Date.now()) {
         await this.impl.updateSharedAlarm();
       } else {
@@ -11041,6 +11120,10 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
    */
   async optInDoctorControls(ownerId: string, gadgetId: WorkpieceId, uiSha256: string): Promise<void> {
     this.impl.assertInstallReady();
+    this.#optInDoctorControls(ownerId, gadgetId, uiSha256);
+  }
+
+  #optInDoctorControls(ownerId: string, gadgetId: WorkpieceId, uiSha256: string): void {
     if (!ownerId || ownerId !== this.impl.ownerId || !/^[a-f0-9]{64}$/.test(uiSha256)) throw new Error("Invalid Doctor controls consent.");
     const gadget = this.impl.getGadgetRecord(gadgetId);
     const edge = gadget.bindings.DOCTOR;
@@ -11060,6 +11143,10 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   /** Only trusted blueprint creation may initialize this private, owner-key-bound read output. */
   async configureDoctorReadOutput(ownerId: string, ledgerKey: string, initialize = false): Promise<void> {
     this.impl.assertInstallReady();
+    this.#configureDoctorReadOutput(ownerId, ledgerKey, initialize);
+  }
+
+  #configureDoctorReadOutput(ownerId: string, ledgerKey: string, initialize: boolean, installing = false): void {
     if (this.impl.ownerId !== ownerId) return;
     const gadgets = [...this.impl.storage.gadgets.list()].filter((g): g is GadgetRecord => g.type === "gadget" && g.output?.id === "doctor");
     if (!gadgets.length) return;
@@ -11087,7 +11174,8 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     gadget.privateReadOutput = true;
     this.impl.storage.gadgets.put(gadget);
     this.impl.storage.prohibitAllSharing.put(true);
-    this.impl.bumpVersion([gadget.id]);
+    // Installer has no live clients and must not asynchronously publish lastActive before ready.
+    if (!installing) this.impl.bumpVersion([gadget.id]);
   }
 
   /** Install or repair the authenticated, read-only LEDGER binding on Paths to Points. */
@@ -11142,6 +11230,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
              notifyClosed: NativeRpcStub<() => void>,
              shareKey?: string,
              configureObservers?: RpcStub<ObserverConfigCallback>): Promise<Overseer> {
+    await this.resolveDeploymentInstallReady(userId);
     this.impl.assertInstallReady();
     let firstOpen = !this.impl.ownerId;
     if (firstOpen) {

@@ -1,3 +1,5 @@
+import type { DeploymentInstallResult } from '@gadgets/workshop-shared/deployment-install';
+import type { RpcStub as NativeRpcStub } from 'cloudflare:workers';
 import type { InstallQuarantineTicket } from './deployment-install-quarantine.js';
 import { validateDeploymentInstallSnapshot, deploymentInstallReleaseDigest } from '@gadgets/workshop-shared/deployment-install';
 import {UserUsageV2} from './user-usage-v2.js';
@@ -102,10 +104,14 @@ type DeploymentInstallAttempt = {
   cancelled: boolean;
   // Retained even on cancellation/expiry until the exact destination acknowledges cleanup.
   workspaceId?: string;
+  result?: DeploymentInstallResult;
 };
 
 // One fixed-window slot per User, not permanent per-click tombstones. No alarms or quota roots.
 const INSTALL_ATTEMPT_KEY = 'deployment-install-attempt-v1';
+// One private receipt per installed workspace, deleted with that workspace; never public metadata.
+const INSTALL_READY_PREFIX = 'deployment-install-ready-v1:';
+type InstallReceipt = {ticket: InstallQuarantineTicket; result: DeploymentInstallResult};
 
 type LoginSessionRecord = {
   tokenId: string,  // sha256 hash of token, hex-formatted
@@ -371,7 +377,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
       throw new Error('Installation attempt is unavailable.');
     }
     let existing = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
-    if (existing?.workspaceId && existing.expiresAt <= Date.now()) {
+    if (existing?.workspaceId && !existing.result && existing.expiresAt <= Date.now()) {
       await this.cancelDeploymentInstallAttempt(existing.session, existing.attempt);
       // Cleanup yielded: never overwrite a concurrent generation or adopt a new identity.
       existing = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
@@ -409,7 +415,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
   /** Close-only cleanup may run after revocation; a stale cancellation cannot affect another slot. */
   async cancelDeploymentInstallAttempt(session: string, attempt: string) {
     const record = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
-    if (record?.session !== session || record.attempt !== attempt) return;
+    if (record?.session !== session || record.attempt !== attempt || record.result) return;
     this.ctx.storage.kv.put(INSTALL_ATTEMPT_KEY, {...record, cancelled: true});
     if (!record.workspaceId) return;
     const targets = this.ctx.exports.OverseerDurableObject;
@@ -459,6 +465,68 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     const result = await targets.get(targets.idFromString(workspaceId)).initializeDeploymentInstallQuarantine(ticket);
     await this.checkDeploymentInstallTarget(ticket);
     return {workspaceId, workpieceId: result.workpieceId};
+  }
+
+  /** Lookup-only bounded reply recovery. A committed result is not retroactively cancelled. */
+  getDeploymentInstallResult(session: string, attempt: string): DeploymentInstallResult | undefined {
+    const record = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
+    if (record?.session === session && record.attempt === attempt) return record.result;
+    return undefined;
+  }
+
+  /** Durable publication proof belongs to the existing workspace, not a per-click tombstone.
+   * Close-before-cleanup synchronously excludes a racing publication even after its last await.
+   */
+  resolveDeploymentInstallPublication(ticket: InstallQuarantineTicket, close = false): DeploymentInstallResult | undefined {
+    const installed = this.storage.gadgets.get(ticket.workspaceId) &&
+      this.ctx.storage.kv.get<InstallReceipt>(INSTALL_READY_PREFIX + ticket.workspaceId);
+    if (installed && JSON.stringify(installed.ticket) === JSON.stringify(ticket)) return installed.result;
+    const record = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
+    if (close && record?.workspaceId && !record.result &&
+        JSON.stringify(this.#installTicket(record)) === JSON.stringify(ticket)) {
+      this.ctx.storage.kv.put(INSTALL_ATTEMPT_KEY, {...record, cancelled: true});
+    }
+    return undefined;
+  }
+
+  /** Private final coordinator. All external work precedes one synchronous durable transaction.
+   * Cancellation linearizes at this User's close write; publication at this transaction. A root
+   * abort requests that close, and the final callback additionally checks root liveness. There is
+   * no distributed atomic instant between a socket abort and delivery to this durable authority.
+   */
+  async publishDeploymentInstallAttempt(session: string, attempt: string, digest: string, principal: string,
+      checkRoot: NativeRpcStub<() => Promise<number>>): Promise<DeploymentInstallResult> {
+    const committed = this.getDeploymentInstallResult(session, attempt);
+    if (committed) return committed;
+    await this.stageDeploymentInstallAttempt(session, attempt, digest, principal);
+    await this.checkDeploymentInstallAttempt(session, attempt, digest, principal);
+    const record = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY)!;
+    const ticket = this.#installTicket(record);
+    const targets = this.ctx.exports.OverseerDurableObject;
+    const ready = await targets.get(targets.idFromString(ticket.workspaceId)).readyDeploymentInstallQuarantine(ticket);
+    await this.checkDeploymentInstallTarget(ticket);
+    const rootValidUntil = await checkRoot();
+    // No await after the final attempt/incarnation/access check. Duplicate confirms may have
+    // committed during any earlier await; both return that exact result, never write twice.
+    const existing = this.getDeploymentInstallResult(session, attempt);
+    if (existing) return existing;
+    const current = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
+    if (!Number.isFinite(rootValidUntil) || rootValidUntil <= Date.now() ||
+        !current || current.session !== session || current.attempt !== attempt || current.digest !== digest ||
+        current.workspaceId !== ticket.workspaceId || current.principal !== principal || current.cancelled ||
+        current.expiresAt !== ticket.expiresAt || current.expiresAt <= Date.now() ||
+        current.incarnation !== ticket.incarnation || this.ctx.storage.kv.get<string>('usage-identity-v2') !== ticket.incarnation ||
+        this.storage.deploymentIdentity.get()?.storageKey !== principal) throw new Error('Installation attempt is unavailable.');
+    const result = {workspaceId: ticket.workspaceId, workpieceId: ready.workpieceId, releaseId: ready.releaseId};
+    const created = new Date(ticket.expiresAt - 60_000);
+    this.ctx.storage.transactionSync(() => {
+      this.storage.gadgets.put({id: ticket.workspaceId, title: ready.title, created, lastActive: created});
+      this.ctx.storage.kv.put(INSTALL_READY_PREFIX + ticket.workspaceId, {ticket, result});
+      this.storage.outputs.put({workspaceId: ticket.workspaceId, workpieceId: ready.workpieceId,
+        title: ready.title, created, output: {id: 'doctor', noun: 'Doctor', plural: 'Doctor', icon: 'appWindow'}});
+      this.ctx.storage.kv.put(INSTALL_ATTEMPT_KEY, {...record, result});
+    });
+    return result;
   }
 
   private usageOwnerV2?: UserUsageV2;
@@ -1120,6 +1188,7 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     this.assertWorkspaceMutable(id);
     this.storage.gadgets.delete(id);
     this.storage.outputs.byWorkspace.delete(id);
+    this.ctx.storage.kv.delete(INSTALL_READY_PREFIX + id);
   }
 
   /**

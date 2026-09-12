@@ -2,7 +2,7 @@ import { newWorkersRpcResponse } from "./rpc-session.js";
 import { deploymentAccessEnabled, DeploymentAccessError, readDeploymentAccess, watchDeploymentAccess } from "./deployment-access.js";
 import { RpcStub, RpcTarget } from "capnweb";
 import { validateRpc, skipRpcValidation } from "capnweb-validate";
-import { stageDeploymentInstallQuarantine } from './deployment-install-quarantine.js';
+import { stageDeploymentInstallQuarantine, publishDeploymentInstall } from './deployment-install-quarantine.js';
 import { deploymentInstallReleaseDigest, validateDeploymentInstallRelease } from '@gadgets/workshop-shared/deployment-install';
 import type { DeploymentInstallPreparation, DeploymentInstallResult } from '@gadgets/workshop-shared/deployment-install';
 import type { JWTPayload } from "jose";
@@ -80,7 +80,7 @@ type Env = Cloudflare.Env & {
 // =======================================================================================
 
 /** Kernel-local staging shape derived from the actual root, never part of the public RPC API. */
-export type DeploymentInstallQuarantineRoot = Pick<AuthenticatedApiImpl, typeof stageDeploymentInstallQuarantine>;
+export type DeploymentInstallQuarantineRoot = Pick<AuthenticatedApiImpl, typeof stageDeploymentInstallQuarantine | typeof publishDeploymentInstall>;
 
 @validateRpc()
 class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
@@ -243,6 +243,50 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       // Abort/disposal explicitly close the slot; destination expiry also owns orphan cleanup.
       throw new Error('Installation attempt is unavailable.');
     }
+  };
+
+  // Trusted composition entry, not host consent and not reachable through a public RPC string.
+  [publishDeploymentInstall] = async (attempt: string): Promise<DeploymentInstallResult> => {
+    const prepared = this.#installPreparation;
+    if (!prepared || prepared.attempt !== attempt) throw new Error('Installation attempt is unavailable.');
+    const generation = this.#installGeneration;
+    const check = async () => {
+      this.#checkInstallLive(generation);
+      const digest = await deploymentInstallReleaseDigest(prepared.release);
+      this.#checkInstallLive(generation);
+      const current = await this.#readInstallRelease();
+      this.#checkInstallLive(generation);
+      if (!current || await deploymentInstallReleaseDigest(current) !== digest) {
+        throw new Error('Installation release is unavailable.');
+      }
+      this.#checkInstallLive(generation);
+      const access = await readDeploymentAccess(this.env, prepared.principal);
+      this.#checkInstallLive(generation);
+      if (Date.now() >= prepared.expiresAt) throw new Error('Installation attempt is unavailable.');
+      return Math.min(access?.validUntil ?? prepared.expiresAt, prepared.expiresAt);
+    };
+    // Committed-result lookup deliberately precedes liveness: cancellation cannot undo a commit
+    // or make a lost success reply claim "cancelled". Recovery returns IDs, not a capability.
+    let result = await this.#user.getDeploymentInstallResult(this.#installSession, attempt);
+    if (!result) {
+      await check();
+      const digest = await deploymentInstallReleaseDigest(prepared.release);
+      this.#checkInstallLive(generation);
+      try {
+        result = await this.#user.publishDeploymentInstallAttempt(
+          this.#installSession, attempt, digest, prepared.principal, check);
+      } catch {
+        result = await this.#user.getDeploymentInstallResult(this.#installSession, attempt);
+        if (!result) throw new Error('Installation outcome is unavailable; retry this attempt.');
+      }
+    }
+    // Best-effort materialization of an already committed proof. Open/alarm/retry also recover;
+    // a failed ACK, revoked access or later abort must not misreport that commit as cancellation.
+    try {
+      await this.overseers.get(this.overseers.idFromString(result.workspaceId))
+          .resolveDeploymentInstallReady(this.#userId.toString());
+    } catch { /* durable User result remains authoritative */ }
+    return result;
   };
 
   @skipRpcValidation()
@@ -455,6 +499,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   async openGadget(id: string, shareKey?: string,
                    configureObservers?: RpcStub<ObserverConfigCallback>)
       : Promise<RpcStub<Overseer>> {
+    await this.overseers.get(this.overseers.idFromString(id)).resolveDeploymentInstallReady(this.#userId.toString());
     // The authenticated MilesVault identity already authorizes its native Ledger account. Finish
     // provisioning before Overseer seeds ambient capabilities, so agents never have to ask the
     // same signed-in user to connect MilesVault back to itself.
