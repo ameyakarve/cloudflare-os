@@ -9,6 +9,7 @@ import type { Overseer } from "@gadgets/workshop-shared/api";
 import { OverseerDurableObject, makeOverseerStorage } from "../src/overseer.js";
 import type { ActionRecord } from "../src/overseer.js";
 import { makeMockStorage } from "./mock-storage.js";
+import { INSTALL_QUARANTINE_KEY } from '../src/deployment-install-quarantine.js';
 
 /**
  * The production schema over mock storage, so the action suites (auto-approval drain, pending
@@ -77,11 +78,21 @@ export async function openFakeOverseer(
   let role = opts.role ?? "build";
   let ownerId = "owner-id";
   let userId = role === "build" ? ownerId : "viewer-id";
+  const readinessStorage = makeMockStorage();
   let overseer = {
     open: OverseerDurableObject.prototype.open,
+    resolveDeploymentInstallReady: OverseerDurableObject.prototype.resolveDeploymentInstallReady,
+    // Ordinary workspaces have no installation marker. Execute the real resolver's legacy
+    // branch, rather than replacing readiness with an unconditional success.
+    ctx: { storage: readinessStorage },
     env: {},
     impl: {
       checkDeploymentAccess: async () => undefined,
+      // This fixture models only ordinary workspaces. Never bless an installed target here;
+      // installation tests use actual User/Overseer storage and the publication handshake.
+      assertInstallReady: () => {
+        if (readinessStorage.kv.get(INSTALL_QUARANTINE_KEY)) throw new Error('Installation workspace is quarantined.');
+      },
       ownerId,
       assertWorkspaceMutable: () => {},
       assertGatekeeperUsable: () => {},
@@ -111,6 +122,6 @@ export async function openFakeOverseer(
       }),
       ...opts.impl,
     },
-  } satisfies Pick<OverseerDurableObject, "open"> & { impl: object, env: object };
+  } satisfies Pick<OverseerDurableObject, "open" | "resolveDeploymentInstallReady"> & { impl: object, env: object, ctx: object };
   return overseer.open(userId, `${userId}-profile`, new NativeRpcStub<() => void>(() => {}));
 }
