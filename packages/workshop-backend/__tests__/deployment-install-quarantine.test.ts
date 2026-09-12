@@ -2,11 +2,11 @@ import { env, RpcStub } from 'cloudflare:workers';
 import { createExecutionContext, runInDurableObject, runDurableObjectAlarm } from 'cloudflare:test';
 import { describe, expect, it, vi } from 'vitest';
 import { PublicApiImpl, type DeploymentInstallQuarantineRoot } from '../src/server.js';
-import { INSTALL_QUARANTINE_KEY, stageDeploymentInstallQuarantine, type InstallQuarantineTicket } from '../src/deployment-install-quarantine.js';
-import { deploymentInstallReleaseDigest, type DeploymentInstallRelease } from '@gadgets/workshop-shared/deployment-install';
+import { INSTALL_QUARANTINE_KEY, stageDeploymentInstallQuarantine, publishDeploymentInstall, type InstallQuarantineTicket } from '../src/deployment-install-quarantine.js';
+import { deploymentInstallReleaseDigest, type DeploymentInstallRelease, type DeploymentInstallResult } from '@gadgets/workshop-shared/deployment-install';
 import { encodeDeploymentInstallSnapshot, type DeploymentInstallSnapshot } from '@gadgets/workshop-shared/deployment-install';
 import { OverseerDurableObject } from '../src/overseer.js';
-import type { UserDurableObject } from '../src/user.js';
+import { UserDurableObject } from '../src/user.js';
 
 declare global { namespace Cloudflare { interface Env {
   TEST_OVERSEER: DurableObjectNamespace<OverseerDurableObject>;
@@ -29,6 +29,10 @@ async function fixture(run: (f: {
   users: DurableObjectNamespace<UserDurableObject>;
   targets: DurableObjectNamespace<OverseerDurableObject>;
   stage: () => Promise<{workspaceId: string; workpieceId: number}>;
+  publish: () => Promise<{workspaceId: string; workpieceId: number; releaseId: string}>;
+  other: () => Promise<{user: DurableObjectStub<UserDurableObject>; publish: () => Promise<DeploymentInstallResult>}>;
+  revoke: () => void;
+  changeRelease: () => void;
   cancel: () => Promise<void>;
   abort: AbortController;
   slot: () => Promise<Slot>;
@@ -47,7 +51,13 @@ async function fixture(run: (f: {
         'server.js': 'throw new Error("must not run")'}};
     const hash = await crypto.subtle.digest('SHA-256', encodeDeploymentInstallSnapshot(snapshot));
     let pauseSnapshot: (() => Promise<void>) | undefined;
-    const publisher = {getDeploymentInstallRelease: async () => release,
+    let currentRelease = release;
+    let revoked = false;
+    const operation = vi.fn(() => {throw new Error('Installation must not open a Doctor session');});
+    const budget = vi.spyOn(UserDurableObject.prototype, 'beginDeploymentUsageRun')
+      .mockImplementation(async () => {throw new Error('Installation must not acquire usage');});
+    const publisher = {openDoctor: operation, openDoctorControlsV1: operation,
+      getDeploymentInstallRelease: async () => currentRelease,
       getDeploymentInstallSnapshot: async () => {
         await pauseSnapshot?.();
         return {snapshot, sha256: Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('')};
@@ -56,7 +66,7 @@ async function fixture(run: (f: {
     const prior = {app: realEnv.MILESVAULT_DOCTOR_APP, auth: realEnv.MILESVAULT_AUTH,
       policy: realEnv.DEPLOYMENT_ACCESS_POLICY};
     Object.assign(realEnv, {MILESVAULT_DOCTOR_APP: publisher, MILESVAULT_AUTH: 'true',
-      DEPLOYMENT_ACCESS_POLICY: {checkAccess: async () => ({allowed: true, validUntil: Date.now() + 60_000})}});
+      DEPLOYMENT_ACCESS_POLICY: {checkAccess: async () => revoked ? {allowed: false} : ({allowed: true, validUntil: Date.now() + 60_000})}});
     const abort = new AbortController();
     const context = Object.assign(createExecutionContext(), {exports: ctx.exports,
       waitUntil: (p: Promise<unknown>) => ctx.waitUntil(p)});
@@ -72,6 +82,19 @@ async function fixture(run: (f: {
       const local = api as typeof api & DeploymentInstallQuarantineRoot;
       const stage = () => local[stageDeploymentInstallQuarantine](prepared.attempt);
       await run({user, users: ctx.exports.UserDurableObject, targets: ctx.exports.OverseerDurableObject, stage,
+        publish: () => local[publishDeploymentInstall](prepared.attempt),
+        other: async () => {
+          const identity = `Other-${crypto.randomUUID()}@example.com`;
+          const otherRoot = new PublicApiImpl(context, realEnv, () => {},
+            {email: identity.toLowerCase(), externalIdentityKey: identity});
+          const otherApi = await otherRoot.authenticateFromCfAccess();
+          const otherPrepared = await otherApi.prepareDeploymentInstall(release.releaseId);
+          const otherLocal = otherApi as typeof otherApi & DeploymentInstallQuarantineRoot;
+          return {user: ctx.exports.UserDurableObject.get(ctx.exports.UserDurableObject.idFromString(await otherApi.getRecoveryPrincipal())),
+            publish: () => otherLocal[publishDeploymentInstall](otherPrepared.attempt)};
+        },
+        revoke: () => {revoked = true;},
+        changeRelease: () => {currentRelease = {...release, uiSha256: 'b'.repeat(64)};},
         cancel: () => api.cancelDeploymentInstall(prepared.attempt), abort, slot,
         ticket: async () => {
           const s = await slot();
@@ -80,7 +103,7 @@ async function fixture(run: (f: {
         }, publicConfirm: () => api.confirmDeploymentInstall(prepared.attempt),
         probePublic: async () => {
           using rpc = new RpcStub(await root.authenticateFromCfAccess());
-          for (const method of ['stageDeploymentInstallQuarantine', 'stageDeploymentInstallAttempt']) {
+          for (const method of ['stageDeploymentInstallQuarantine', 'stageDeploymentInstallAttempt', 'publishDeploymentInstall', 'publishDeploymentInstallAttempt', 'readyDeploymentInstallQuarantine']) {
             await denied(() => Reflect.get(rpc, method)(prepared.attempt), 'does not implement');
           }
         },
@@ -103,6 +126,8 @@ async function fixture(run: (f: {
         },
       });
     } finally {
+      expect(operation).not.toHaveBeenCalled();
+      expect(budget).not.toHaveBeenCalled();
       vi.restoreAllMocks();
       Object.assign(realEnv, {MILESVAULT_DOCTOR_APP: prior.app, MILESVAULT_AUTH: prior.auth,
         DEPLOYMENT_ACCESS_POLICY: prior.policy});
@@ -330,6 +355,239 @@ describe('actual User -> new Overseer installer quarantine', () => {
       expect(await next.stage()).toEqual(second);
       const s = await slot();
       await user.cancelDeploymentInstallAttempt(s.session, s.attempt);
+    });
+  });
+});
+
+// Scheduling-only native barriers; promises/timers are created in the receiving DO context.
+function publicationBarrier(phase: 'binding' | 'ready' | 'publish') {
+  const state = {entered: false, resumed: false};
+  const wait = async () => {
+    state.entered = true;
+    while (!state.resumed) await new Promise(r => setTimeout(r, 1));
+  };
+  const ready = OverseerDurableObject.prototype.readyDeploymentInstallQuarantine;
+  const check = UserDurableObject.prototype.checkDeploymentInstallTarget;
+  let readyReturned = false;
+  vi.spyOn(OverseerDurableObject.prototype, 'readyDeploymentInstallQuarantine')
+    .mockImplementation(async function(this: OverseerDurableObject, ticket) {
+      if (phase === 'binding') await wait();
+      const result = await ready.call(this, ticket);
+      readyReturned = true;
+      if (phase === 'ready') await wait();
+      return result;
+    });
+  if (phase === 'publish') {
+    vi.spyOn(UserDurableObject.prototype, 'checkDeploymentInstallTarget')
+      .mockImplementation(async function(this: UserDurableObject, ticket) {
+        await check.call(this, ticket);
+        if (readyReturned) await wait();
+      });
+  }
+  return {entered: (async () => {while (!state.entered) await new Promise(r => setTimeout(r, 1));})(),
+    resume: () => {state.resumed = true;}};
+}
+
+describe('actual auth-root -> User -> Overseer private publication', () => {
+  it('two actual authenticated roots publish only their own new workspaces and never exchange readiness authority', async () => {
+    await fixture(async ({publish, user, targets, other, ticket}) => {
+      const b = await other();
+      const [aResult, bResult] = await Promise.all([publish(), b.publish()]);
+      expect(aResult.workspaceId).not.toBe(bResult.workspaceId);
+      expect(await user.getGadget(bResult.workspaceId)).toBeNull();
+      expect(await b.user.getGadget(aResult.workspaceId)).toBeNull();
+      expect(await b.user.resolveDeploymentInstallPublication(await ticket())).toBeUndefined();
+      for (const [owner, result, foreign] of [[user, aResult, b.user], [b.user, bResult, user]] as const) {
+        const target = targets.get(targets.idFromString(result.workspaceId));
+        await target.resolveDeploymentInstallReady(owner.id.toString());
+        await denied(() => target.resolveDeploymentInstallReady(foreign.id.toString()));
+        expect(await owner.listGadgets()).toHaveLength(1);
+      }
+    });
+  });
+
+  it('a later attempt reclaims only the bounded slot; old cancellation/cleanup cannot delete the committed workspace', async () => {
+    await fixture(async ({publish, user, targets, ticket, fresh, slot}) => {
+      const first = await publish();
+      const original = await ticket();
+      vi.spyOn(Date, 'now').mockReturnValue(original.expiresAt + 1);
+      const next = await fresh();
+      const second = await next.stage();
+      expect(second.workspaceId).not.toBe(first.workspaceId);
+      await user.cancelDeploymentInstallAttempt(original.session, original.attempt);
+      await targets.get(targets.idFromString(first.workspaceId)).cancelDeploymentInstallQuarantine(original);
+      expect((await slot()).workspaceId).toBe(second.workspaceId);
+      expect(await user.listGadgets()).toHaveLength(1);
+      await user.deleteGadget(first.workspaceId);
+      await runInDurableObject(user, (_u, c) => expect(c.storage.kv.get('deployment-install-ready-v1:' + first.workspaceId)).toBeUndefined());
+      const s = await slot();
+      await user.cancelDeploymentInstallAttempt(s.session, s.attempt);
+    });
+  });
+
+  it('publication retries a lost initialization reply and ready target eviction without selecting another target', async () => {
+    await fixture(async ({publish, targets, ticket, user}) => {
+      const initialize = OverseerDurableObject.prototype.initializeDeploymentInstallQuarantine;
+      vi.spyOn(OverseerDurableObject.prototype, 'initializeDeploymentInstallQuarantine')
+        .mockImplementationOnce(async function(this: OverseerDurableObject, admission) {
+          await initialize.call(this, admission); throw new Error('Lost init reply');
+        });
+      await denied(publish, 'unavailable');
+      const original = await ticket();
+      const target = targets.get(targets.idFromString(original.workspaceId));
+      vi.restoreAllMocks();
+      await target.readyDeploymentInstallQuarantine(original);
+      try { await runInDurableObject(target, (_o, c) => c.abort('ready target reopen')); } catch { /* native eviction */ }
+      const result = await publish();
+      expect(result.workspaceId).toBe(original.workspaceId);
+      expect(await user.listGadgets()).toHaveLength(1);
+    });
+  });
+
+  it('publishes exactly one pinned tuple, survives double-confirm/reopen/expiry/cancel, and never opens saved code', async () => {
+    await fixture(async ({publish, user, users, targets, ticket, cancel, publicConfirm, probePublic, abort}) => {
+      await probePublic();
+      const [first, second] = await Promise.all([publish(), publish()]);
+      expect(second).toEqual(first);
+      const original = await ticket();
+      expect(first.releaseId).toBe(release.releaseId);
+      expect(await publish()).toEqual(first);
+      expect(await user.listGadgets()).toHaveLength(1);
+      expect(JSON.stringify(await user.listGadgets())).not.toContain(original.session);
+      expect(JSON.stringify(await user.getGadget(first.workspaceId))).not.toContain(original.attempt);
+      expect((await user.listOutputs()).outputs).toHaveLength(1);
+      const target = targets.get(targets.idFromString(first.workspaceId));
+      await runInDurableObject(target, async (o, c) => {
+        const impl = o['impl'];
+        expect(c.storage.kv.get(INSTALL_QUARANTINE_KEY)).toMatchObject({state: 'published', workpieceId: first.workpieceId});
+        const gadget = impl.getGadgetRecord(first.workpieceId);
+        expect(gadget.doctorControls).toEqual({version: 1, uiSha256: release.uiSha256, ownerId: user.id.toString()});
+        expect(impl.storage.gatekeepers.get(gadget.bindings.DOCTOR.target)?.systemResource)
+          .toEqual({type: 'doctorRead', identityKey: original.principal});
+        expect(await impl.gitStore.readCommitFiles(gadget.commitId!)).toEqual(new Map([
+          ['README.md', 'Frozen fixture'], ['client.js', 'throw new Error("must not run")'],
+          ['server.js', 'throw new Error("must not run")'],
+        ]));
+        impl.ensureAmbientCapsules = async () => {};
+        impl.markOutputsDirty = () => {};
+        impl.joinOutputsFanout = () => () => {};
+        using notify = new RpcStub(() => {});
+        using host = new RpcStub(await o.open(user.id.toString(), original.principal, notify));
+        using client = await host.getGadget(first.workpieceId);
+        // No fixture factory/approval: a missing pinned UI must deny, never execute saved bytes.
+        await denied(() => client.getUiBundle(), 'getDoctorControlUi');
+        await denied(() => client.connectToGadget(), 'pinned Doctor controls UI');
+      });
+      const b = users.get(users.newUniqueId());
+      await denied(() => target.resolveDeploymentInstallReady(b.id.toString()));
+      expect(await b.listGadgets()).toEqual([]);
+      await cancel(); abort.abort();
+      expect(await publish()).toEqual(first); // Already committed is not falsely reported cancelled.
+      await denied(publicConfirm, 'unavailable');
+      try { await runInDurableObject(user, (_u, c) => c.abort('publication User reopen')); } catch { /* native eviction */ }
+      try { await runInDurableObject(target, (_o, c) => c.abort('publication target reopen')); } catch { /* native eviction */ }
+      vi.spyOn(Date, 'now').mockReturnValue(original.expiresAt + 1);
+      expect(await publish()).toEqual(first);
+      await targets.get(target.id).cancelDeploymentInstallQuarantine(original);
+      expect(await users.get(user.id).listGadgets()).toHaveLength(1);
+      await runInDurableObject(targets.get(target.id), o => expect(Array.from(o['impl'].storage.gadgets.list())).toHaveLength(1));
+    });
+  });
+
+  for (const phase of ['init', 'binding', 'ready', 'publish'] as const) {
+    for (const event of ['cancel', 'abort', 'reset', 'aba', 'expiry', 'revoke', 'descriptor'] as const) {
+      it(`denies ${event} at the native ${phase} await, with no visible or usable partial target`, async () => {
+        await fixture(async ({publish, user, targets, ticket, cancel, abort, revoke, changeRelease, pauseInit}) => {
+          const pause = phase === 'init' ? pauseInit() : publicationBarrier(phase);
+          const pending = denied(publish, 'unavailable');
+          await pause.entered;
+          const original = await ticket();
+          const target = targets.get(targets.idFromString(original.workspaceId));
+          expect(await user.listGadgets()).toEqual([]);
+          expect((await user.listOutputs()).outputs).toEqual([]);
+          const probes = hidden(target, user.id.toString());
+          if (phase !== 'init') await probes;
+          let closing: Promise<void> | undefined;
+          if (event === 'cancel') closing = cancel();
+          if (event === 'abort') abort.abort();
+          if (event === 'reset' || event === 'aba') {
+            await runInDurableObject(user, async (u, c) => {
+              const identity = u['storage'].deploymentIdentity.get()!;
+              if (event === 'reset') {
+                await c.storage.deleteAll();
+                await u.authenticateFromCfAccess(identity.subject, true);
+              } else u['storage'].deploymentIdentity.put(null);
+              await u.bindDeploymentIdentity(identity);
+            });
+          }
+          if (event === 'expiry') vi.spyOn(Date, 'now').mockReturnValue(original.expiresAt + 1);
+          if (event === 'revoke') revoke();
+          if (event === 'descriptor') changeRelease();
+          pause.resume();
+          await pending; await closing; await probes;
+          await hidden(target, user.id.toString());
+          expect(await user.listGadgets()).toEqual([]);
+          expect((await user.listOutputs()).outputs).toEqual([]);
+          await target.cancelDeploymentInstallQuarantine(original);
+        });
+      });
+    }
+  }
+
+  for (const method of ['readyDeploymentInstallQuarantine', 'resolveDeploymentInstallReady'] as const) {
+    it(`recovers a native lost ${method} reply at the same exact target`, async () => {
+      await fixture(async ({publish, ticket, targets, user}) => {
+        const actual = OverseerDurableObject.prototype[method];
+        if (method === 'readyDeploymentInstallQuarantine') {
+          const ready = OverseerDurableObject.prototype.readyDeploymentInstallQuarantine;
+          vi.spyOn(OverseerDurableObject.prototype, method).mockImplementationOnce(async function(this: OverseerDurableObject, admission) {
+            await ready.call(this, admission); throw new Error('Lost ready reply');
+          });
+          await denied(publish, 'unavailable');
+        } else {
+          const resolve = OverseerDurableObject.prototype.resolveDeploymentInstallReady;
+          vi.spyOn(OverseerDurableObject.prototype, method).mockImplementationOnce(async function(this: OverseerDurableObject, owner) {
+            await resolve.call(this, owner); throw new Error('Lost final ready ACK');
+          });
+          await publish();
+        }
+        expect(actual).toBeDefined();
+        const original = await ticket();
+        vi.restoreAllMocks();
+        const result = await publish();
+        expect(result.workspaceId).toBe(original.workspaceId);
+        expect(await publish()).toEqual(result);
+        expect(await user.listGadgets()).toHaveLength(1);
+        const target = targets.get(targets.idFromString(result.workspaceId));
+        await runInDurableObject(target, o => expect(Array.from(o['impl'].storage.gadgets.list())).toHaveLength(1));
+      });
+    });
+  }
+
+  it('lost durable commit reply plus abort returns committed IDs; expiry alarm never deletes published content', async () => {
+    await fixture(async ({publish, user, targets, ticket, abort}) => {
+      const commit = UserDurableObject.prototype.publishDeploymentInstallAttempt;
+      vi.spyOn(UserDurableObject.prototype, 'publishDeploymentInstallAttempt')
+        .mockImplementationOnce(async function(this: UserDurableObject, ...args) {
+          await commit.apply(this, args);
+          abort.abort();
+          throw new Error('Lost commit reply');
+        });
+      // Keep the target locally ready to exercise durable proof recovery, not just local state.
+      vi.spyOn(OverseerDurableObject.prototype, 'resolveDeploymentInstallReady').mockRejectedValue(new Error('Lost final transport'));
+      const first = await publish();
+      expect(await publish()).toEqual(first);
+      const original = await ticket();
+      const target = targets.get(targets.idFromString(first.workspaceId));
+      await runInDurableObject(target, (_o, c) => expect(c.storage.kv.get(INSTALL_QUARANTINE_KEY)).toMatchObject({state: 'ready'}));
+      vi.restoreAllMocks();
+      vi.spyOn(Date, 'now').mockReturnValue(original.expiresAt + 1);
+      await runDurableObjectAlarm(target);
+      await runInDurableObject(target, (o, c) => {
+        expect(c.storage.kv.get(INSTALL_QUARANTINE_KEY)).toMatchObject({state: 'published'});
+        expect(Array.from(o['impl'].storage.gadgets.list())).toHaveLength(1);
+      });
+      expect(await user.listGadgets()).toHaveLength(1);
     });
   });
 });
