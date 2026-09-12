@@ -24,7 +24,8 @@ export function isDeploymentUsageError(error: unknown): error is DeploymentUsage
 
 /** Optional for upstream deployments; a required but absent binding must fail closed. */
 export function deploymentUsageEnabled(env: Cloudflare.Env): boolean {
-  return !!env.DEPLOYMENT_USAGE_POLICY || env.DEPLOYMENT_USAGE_REQUIRED === "true";
+  return !!env.DEPLOYMENT_USAGE_POLICY || env.DEPLOYMENT_USAGE_REQUIRED === "true" ||
+    env.DEPLOYMENT_USAGE_V2_ROUTE !== undefined;
 }
 
 /** Bound private accounting RPC; late replies never authorize new work. */

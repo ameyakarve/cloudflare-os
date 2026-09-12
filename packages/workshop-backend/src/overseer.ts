@@ -1,4 +1,5 @@
 import { OverseerUsageLifecycle } from './overseer-usage-lifecycle.js';
+import { OverseerUsageAcquisition, type UsageExecution } from './overseer-usage-acquisition.js';
 import type { UsageReceiverTicket } from './usage-acquisition-receiver.js';
 import type { SpecialistRecord } from '@gadgets/workshop-shared/specialists';
 import { parseSpecialists, specialistData, specialistOperation, SpecialistDispatcher, type SpecialistTools } from './specialists';
@@ -1084,6 +1085,9 @@ type ActiveAgentRecord = {
   specialistSelectionErrors?: number;
   // Persisted before inference so a restart cannot reset the same turn's allowance or deadline.
   deploymentUsageRun?: UsageGrant;
+  // Written before the first V2 authority await. A lost handoff must never start a replacement,
+  // even after its bounded journal slot has drained/reused and no final grant was received.
+  deploymentUsageV2Attempted?: true;
   chatId: number;
   // Hex durable object ID of the initiator's user DO, used to re-resolve the model config and for
   // billing.
@@ -1956,9 +1960,42 @@ class OverseerImpl implements AgentHooks {
     return { allowed: true, validUntil: Math.min(...grants.map(grant => grant!.validUntil)) };
   }
 
+  /** Required controls and explicitly named V2 routes never downgrade to transient legacy acquisition. */
+  private usageAcquisitionMode(): 'pairedV2' | 'transientV1' {
+    return this.env.DEPLOYMENT_USAGE_REQUIRED === 'true' || this.env.DEPLOYMENT_USAGE_V2_ROUTE !== undefined
+      ? 'pairedV2' : 'transientV1';
+  }
+
+  private pairedUsage(execution?: UsageExecution, initiator?: AiChatAuthorInfo, existing?: UsageGrant) {
+    return new OverseerUsageAcquisition(this.ctx.storage, this.usageLifecycle, this.users,
+      () => this.checkDeploymentAccess(initiator), () => {
+        if (!execution) return true;
+        const record = this.storage.activeAgents.get(execution.chat);
+        return record?.executionId === execution.id && !record.stopRequested &&
+          (!existing || (record.deploymentUsageRun?.runId === existing.runId &&
+            record.deploymentUsageRun.expiresAt === existing.expiresAt));
+      }, execution);
+  }
+
   /** Begin a quota scope using the workspace owner's privately stored identity. */
-  async newUsageScope(existing?: UsageGrant): Promise<UsageScope | undefined> {
+  async newUsageScope(existing?: UsageGrant, execution?: UsageExecution, initiator?: AiChatAuthorInfo): Promise<UsageScope | undefined> {
     if (!deploymentUsageEnabled(this.env)) return undefined;
+    if (this.usageAcquisitionMode() === 'pairedV2') {
+      if (execution) {
+        const record = this.storage.activeAgents.get(execution.chat);
+        if (record?.executionId !== execution.id || record.stopRequested ||
+            (!existing && record.deploymentUsageV2Attempted)) throw new DeploymentUsageError('expired_run');
+        record.deploymentUsageV2Attempted = true;
+        this.storage.activeAgents.put(record);
+      }
+      const acquired = await this.pairedUsage(execution, initiator, existing).open(existing);
+      try { acquired.check(); }
+      catch (error) { try { await acquired.run.finish(); } finally { acquired.run[Symbol.dispose](); } throw error; }
+      // open() owns failed-grant cleanup itself; do not use an already-disposed root twice.
+      const scope = await UsageScope.open(acquired.run, existing);
+      try { acquired.publish(); return scope; }
+      catch (error) { await scope[Symbol.asyncDispose](); throw error; }
+    }
     if (existing && existing.expiresAt <= Date.now()) throw new DeploymentUsageError('expired_run');
     await this.checkDeploymentAccess();
     if (!this.ownerId) throw new DeploymentUsageError();
@@ -1976,6 +2013,11 @@ class OverseerImpl implements AgentHooks {
     const active = chatId === undefined ? undefined : this.#liveChats.get(chatId)?.usageScope;
     if (active) return new NativeRpcStub(active.borrow());
     if (caller.from === "agent") throw new DeploymentUsageError("expired_run");
+    if (this.usageAcquisitionMode() === 'pairedV2') {
+      const acquired = await this.pairedUsage().open();
+      try { acquired.publish(); return acquired.run; }
+      catch (error) { try { await acquired.run.finish(); } finally { acquired.run[Symbol.dispose](); } throw error; }
+    }
     await this.checkDeploymentAccess();
     if (!this.ownerId) throw new DeploymentUsageError();
     const run = await boundedUsageAcquisition(this.users.get(this.users.idFromString(this.ownerId)).beginDeploymentUsageRun(),
@@ -7589,7 +7631,8 @@ class OverseerImpl implements AgentHooks {
         throw new Error('Specialist chats are immutable execution history. Send a new request to the coordinator.');
       }
       this.#assertExecutionCanRun(chatId, liveChat);
-      liveChat.usageScope = await this.newUsageScope(this.storage.activeAgents.get(chatId)?.deploymentUsageRun);
+      liveChat.usageScope = await this.newUsageScope(this.storage.activeAgents.get(chatId)?.deploymentUsageRun,
+        {chat: chatId, id: liveChat.executionId!}, initiator);
       this.#assertExecutionCanRun(chatId, liveChat);
       if (liveChat.usageScope) {
         // Compare above and re-read AFTER admission; never restore a pre-Stop snapshot.

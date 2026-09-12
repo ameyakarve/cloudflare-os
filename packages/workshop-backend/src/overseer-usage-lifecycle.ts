@@ -36,7 +36,7 @@ export class OverseerUsageLifecycle {
     this.changed();
   }
 
-  /** Future acquisition adapter claims here, before awaits, with its creation-owned execution. */
+  /** Acquisition claims here, before awaits, with its creation-owned execution. */
   claim(id: UsageCandidate, intent: UsageCallerIntent, execution?: {chat: number; id: string}): boolean {
     if (execution && (!Number.isSafeInteger(execution.chat) || execution.chat < 0 ||
         !execution.id || execution.id.length > 128 || execution.id.includes('\0'))) return false;
@@ -53,6 +53,13 @@ export class OverseerUsageLifecycle {
         id.slot, id.generation, execution?.chat ?? null, execution?.id ?? null);
       return true;
     });
+  }
+
+  /** Exact persisted execution link; slot reuse or a same-chat replacement never inherits a lease. */
+  linked(id: UsageCandidate, execution: {chat: number; id: string}): boolean {
+    const link = this.storage.sql.exec<{generation: string; chat: number | null; execution: string | null}>(
+      'SELECT generation, chat, execution FROM overseer_usage_execution_v2 WHERE slot = ?', id.slot).toArray()[0];
+    return link?.generation === id.generation && link.chat === execution.chat && link.execution === execution.id;
   }
 
   closeExecution(chat: number, keepExecution?: string): void {
