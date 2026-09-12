@@ -1,7 +1,9 @@
 import { newWorkersRpcResponse } from "./rpc-session.js";
 import { deploymentAccessEnabled, DeploymentAccessError, readDeploymentAccess, watchDeploymentAccess } from "./deployment-access.js";
 import { RpcStub, RpcTarget } from "capnweb";
-import { validateRpc } from "capnweb-validate";
+import { validateRpc, skipRpcValidation } from "capnweb-validate";
+import { deploymentInstallReleaseDigest } from '@gadgets/workshop-shared/deployment-install';
+import type { DeploymentInstallPreparation, DeploymentInstallResult } from '@gadgets/workshop-shared/deployment-install';
 import type { JWTPayload } from "jose";
 import { PublicApi, AuthenticatedApi, Overseer, GadgetMetadataWithTimestamps, AiChatAuthorInfo, AiModelConfig, AiGatewayInfo, AiModelProvider, ConnectedAccountsSubscriber, ConnectedAccountsFilter, GatekeeperVendorFilter, ObserverConfigCallback, BlueprintLibrarySummary, BlueprintPublicInfo, BlueprintUserSummary, BlueprintBindingAssignment, AgentSpawnerConfig, WorkpieceId, BLUEPRINT_SCREENSHOT_PATH_PREFIX, BLUEPRINT_SCREENSHOT_R2_PREFIX, blueprintScreenshotUrl, ServerConfig, CloudflareUsageInfo, CloudflareAccountOption, LoginAttempt, GatekeeperAppInfo, AdminApi, GatekeeperVendorInfo, OutputFormatOffer, ListOutputsResult, createOpenGadgetError, getOpenGadgetErrorCode, OPEN_GADGET_ERROR_CODES, AUTH_ERROR_CODES, createAuthError } from '@gadgets/workshop-shared/api';
 import type { UiFeatureFlags } from "@gadgets/workshop-shared/feature-flags";
@@ -81,7 +83,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   constructor(private ctx: ExecutionContext, private env: Env,
       userId: DurableObjectId,
       private abortSession: (reason: Error) => void,
-      private externalIdentityKey?: string) {
+      private externalIdentityKey?: string, private sessionSignal?: AbortSignal) {
     super();
 
     this.#userId = userId;
@@ -95,6 +97,129 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   private users: DurableObjectNamespace<UserDurableObject>;
 
   #userId: DurableObjectId;
+  #installSession = crypto.randomUUID();
+  #installClosed = false;
+  #installGeneration = 0;
+  #installPreparation?: DeploymentInstallPreparation;
+  #installPending?: Promise<DeploymentInstallPreparation>;
+
+  #checkInstallLive(generation: number) {
+    if (this.#installClosed || this.sessionSignal?.aborted || generation !== this.#installGeneration) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+  }
+
+  async #readInstallRelease() {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.env.MILESVAULT_DOCTOR_APP?.getDeploymentInstallRelease(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Installation release is unavailable.')), 5_000);
+        }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+
+  async #prepareInstall(releaseId: string, generation: number): Promise<DeploymentInstallPreparation> {
+    const issuedAt = Date.now();
+    this.#checkInstallLive(generation);
+    // This initial slice requires a trusted ingress identity and its stored User binding.
+    const principal = this.externalIdentityKey;
+    if (!principal) throw new Error('Installation release is unavailable.');
+    await readDeploymentAccess(this.env, principal);
+    this.#checkInstallLive(generation);
+    const release = await this.#readInstallRelease();
+    this.#checkInstallLive(generation);
+    if (!release || release.releaseId !== releaseId) throw new Error('Installation release is unavailable.');
+    const digest = await deploymentInstallReleaseDigest(release);
+    this.#checkInstallLive(generation);
+    const ticket = await this.#user.prepareDeploymentInstallAttempt(this.#installSession, digest, principal, issuedAt);
+    try {
+      this.#checkInstallLive(generation);
+      await this.#user.checkDeploymentInstallAttempt(this.#installSession, ticket.attempt, digest, principal);
+      this.#checkInstallLive(generation);
+      await readDeploymentAccess(this.env, principal);
+      this.#checkInstallLive(generation);
+      if (Date.now() >= ticket.expiresAt) throw new Error('Installation attempt is unavailable.');
+      const preparation = {...ticket, principal, release};
+      this.#installPreparation = preparation;
+      return preparation;
+    } catch (error) {
+      this.ctx.waitUntil(this.#user.cancelDeploymentInstallAttempt(this.#installSession, ticket.attempt));
+      throw error;
+    }
+  }
+
+  @skipRpcValidation()
+  async prepareDeploymentInstall(...args: [string]): Promise<DeploymentInstallPreparation> {
+    if (args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 128) {
+      throw new Error('Installation release is unavailable.');
+    }
+    const generation = this.#installGeneration;
+    this.#checkInstallLive(generation);
+    const pending = this.#installPending ??= this.#prepareInstall(args[0], generation);
+    try {
+      const result = await pending;
+      this.#checkInstallLive(generation);
+      if (result.release.releaseId !== args[0] || Date.now() >= result.expiresAt) {
+        throw new Error('Installation attempt is unavailable.');
+      }
+      return result;
+    } catch {
+      throw new Error('Installation attempt is unavailable.');
+    } finally {
+      if (this.#installPending === pending) this.#installPending = undefined;
+    }
+  }
+
+  @skipRpcValidation()
+  async confirmDeploymentInstall(...args: [string]): Promise<DeploymentInstallResult> {
+    const generation = this.#installGeneration;
+    this.#checkInstallLive(generation);
+    const prepared = this.#installPreparation;
+    if (args.length !== 1 || !prepared || args[0] !== prepared.attempt || Date.now() >= prepared.expiresAt) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    try {
+      const digest = await deploymentInstallReleaseDigest(prepared.release);
+      this.#checkInstallLive(generation);
+      const current = await this.#readInstallRelease();
+      this.#checkInstallLive(generation);
+      if (!current || await deploymentInstallReleaseDigest(current) !== digest) {
+        throw new Error('Installation release is unavailable.');
+      }
+      this.#checkInstallLive(generation);
+      await this.#user.checkDeploymentInstallAttempt(this.#installSession, prepared.attempt, digest, prepared.principal);
+      this.#checkInstallLive(generation);
+      await readDeploymentAccess(this.env, prepared.principal);
+      this.#checkInstallLive(generation);
+      if (Date.now() >= prepared.expiresAt) throw new Error('Installation attempt is unavailable.');
+    } catch {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    // INTERNAL SPLIT: no allocation, opt-in, publication, budget or operation until the new-only
+    // coordinator and its post-await readiness/host composition tests have independent review.
+    // This is a code gate, intentionally not an admin/deployment flag or a catalog preference.
+    throw new Error('Installation is not available yet. No app was created.');
+  }
+
+  @skipRpcValidation()
+  async cancelDeploymentInstall(...args: [string]): Promise<void> {
+    if (args.length !== 1 || typeof args[0] !== 'string' || args[0].length > 128) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    if (args[0] !== this.#installPreparation?.attempt) return;
+    ++this.#installGeneration;
+    await this.#user.cancelDeploymentInstallAttempt(this.#installSession, args[0]);
+  }
+
+  [Symbol.dispose]() {
+    this.#installClosed = true;
+    ++this.#installGeneration;
+    const prepared = this.#installPreparation;
+    if (prepared) this.ctx.waitUntil(this.#user.cancelDeploymentInstallAttempt(this.#installSession, prepared.attempt));
+  }
 
   // Get a stub pointing at the user DO. We create a new stub for every request so that we don't
   // have to worry about detecting when a stub has become broken.
@@ -726,13 +851,14 @@ class LoginAttemptImpl extends RpcTarget implements LoginAttempt {
   }
 }
 
+/** Actual authentication root, also used by native boundary fixtures. */
 @validateRpc()
-class PublicApiImpl extends RpcTarget implements PublicApi {
+export class PublicApiImpl extends RpcTarget implements PublicApi {
   users: DurableObjectNamespace<UserDurableObject>;
 
   constructor(private ctx: ExecutionContext, private env: Env,
       private abortSession: (reason: Error) => void,
-      private accessPayload?: JWTPayload) {
+      private accessPayload?: JWTPayload, private sessionSignal?: AbortSignal) {
     super();
     this.users = this.ctx.exports.UserDurableObject;
   }
@@ -784,7 +910,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
       user_id: userId.toString(),
       source: "session_token",
     });
-    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession);
+    return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession, undefined, this.sessionSignal);
   }
 
   async authenticateFromCfAccess(): Promise<AuthenticatedApi> {
@@ -820,7 +946,7 @@ class PublicApiImpl extends RpcTarget implements PublicApi {
       await this.users.get(userId).bindDeploymentIdentity(deploymentIdentity(externalIdentityKey));
     }
     return new AuthenticatedApiImpl(this.ctx, this.env, userId, this.abortSession,
-        typeof externalIdentityKey === "string" ? externalIdentityKey : email);
+        typeof externalIdentityKey === "string" ? externalIdentityKey : email, this.sessionSignal);
   }
 
   async login(username: string, passwordHash: Uint8Array): Promise<string | null> {
@@ -999,8 +1125,11 @@ export default {
       }
       try {
         return await newWorkersRpcResponse(req,
-            new PublicApiImpl(ctx, env, abortSession, accessPayload),
-            { abortSignal: abortController.signal, onClose: () => accessWatch?.[Symbol.dispose]() });
+            new PublicApiImpl(ctx, env, abortSession, accessPayload, abortController.signal),
+            { abortSignal: abortController.signal, onClose: () => {
+              abortController.abort(new Error('API session closed.'));
+              accessWatch?.[Symbol.dispose]();
+            } });
       } catch (error) {
         accessWatch?.[Symbol.dispose]();
         throw error;

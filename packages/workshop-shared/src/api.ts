@@ -358,6 +358,16 @@ export const getAuthErrorCode = authErrors.getCode;
 
 /** Top-level API exposed to the user after they have authenticated. */
 export interface AuthenticatedApi extends RpcTarget {
+  /**
+   * Prepare deployment-owned text only; no workspace, controls or approval is created.
+   * The forbidden tail preserves extra arguments across return-stub validation so the auth root
+   * can reject them rather than silently strip caller-supplied authority selectors.
+   */
+  prepareDeploymentInstall(...args: [releaseId: string, ...forbidden: unknown[]]): Promise<import('./deployment-install.js').DeploymentInstallPreparation>;
+  /** Confirm the same short-lived auth-root attempt. Unavailable until readiness review is complete. */
+  confirmDeploymentInstall(...args: [attempt: string, ...forbidden: unknown[]]): Promise<import('./deployment-install.js').DeploymentInstallResult>;
+  /** Cancel only this root's attempt; cancellation never grants authority. */
+  cancelDeploymentInstall(...args: [attempt: string, ...forbidden: unknown[]]): Promise<void>;
   /** Get profile info for the user who is logged in. */
   whoami(): Promise<AiChatAuthorInfo>;
 

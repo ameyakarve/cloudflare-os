@@ -90,6 +90,18 @@ export type UserChatContext = {
   quickModel?: AiModelConfig;
 }
 
+type DeploymentInstallAttempt = {
+  session: string;
+  attempt: string;
+  digest: string;
+  principal: string;
+  expiresAt: number;
+  cancelled: boolean;
+};
+
+// One fixed-window slot per User, not permanent per-click tombstones. No alarms or quota roots.
+const INSTALL_ATTEMPT_KEY = 'deployment-install-attempt-v1';
+
 type LoginSessionRecord = {
   tokenId: string,  // sha256 hash of token, hex-formatted
   created: Date,
@@ -323,6 +335,49 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     // Ordinary V1 Users do not initialize V2 tables. Wake owns interrupted cleanup, not handoff.
     if (ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE name = 'usage_caller_slots_v2'").toArray().length) {
       ctx.blockConcurrencyWhile(() => this.usageV2().wake());
+    }
+  }
+
+  /** Private auth-root preparation only. This slot cannot publish a workspace or opt in a Gadget. */
+  async prepareDeploymentInstallAttempt(session: string, digest: string, principal: string,
+      issuedAt: number): Promise<{attempt: string; expiresAt: number}> {
+    const expiresAt = issuedAt + 60_000;
+    if (!/^[a-f0-9-]{36}$/.test(session) || !/^[a-f0-9]{64}$/.test(digest) ||
+        !Number.isSafeInteger(issuedAt) || issuedAt > Date.now() || expiresAt <= Date.now()) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    await this.getDeploymentAccessGrant();
+    if (expiresAt <= Date.now() || this.storage.deploymentIdentity.get()?.storageKey !== principal) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+    const existing = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
+    if (existing && existing.expiresAt > Date.now()) {
+      if (existing.session !== session || existing.digest !== digest ||
+          existing.principal !== principal || existing.cancelled) throw new Error('Installation attempt is unavailable.');
+      return {attempt: existing.attempt, expiresAt: existing.expiresAt};
+    }
+    const record: DeploymentInstallAttempt = {session, digest, principal, expiresAt,
+      attempt: crypto.randomUUID(), cancelled: false};
+    this.ctx.storage.kv.put(INSTALL_ATTEMPT_KEY, record);
+    return {attempt: record.attempt, expiresAt};
+  }
+
+  /** Lookup-only recheck after awaited publisher/auth work. Never renews the attempt. */
+  async checkDeploymentInstallAttempt(session: string, attempt: string, digest: string, principal: string) {
+    await this.getDeploymentAccessGrant();
+    const record = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
+    if (!record || record.session !== session || record.attempt !== attempt || record.digest !== digest ||
+        record.principal !== principal || record.cancelled || record.expiresAt <= Date.now() ||
+        this.storage.deploymentIdentity.get()?.storageKey !== principal) {
+      throw new Error('Installation attempt is unavailable.');
+    }
+  }
+
+  /** Close-only cleanup may run after revocation; a stale cancellation cannot affect another slot. */
+  cancelDeploymentInstallAttempt(session: string, attempt: string) {
+    const record = this.ctx.storage.kv.get<DeploymentInstallAttempt>(INSTALL_ATTEMPT_KEY);
+    if (record?.session === session && record.attempt === attempt) {
+      this.ctx.storage.kv.put(INSTALL_ATTEMPT_KEY, {...record, cancelled: true});
     }
   }
 

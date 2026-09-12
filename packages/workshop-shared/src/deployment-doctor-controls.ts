@@ -32,6 +32,8 @@ export async function doctorControlUiHash(jsCode: string): Promise<string> {
 
 /** Private factory extension, intentionally separate from the immutable READ resource. */
 export interface DoctorControlFactory {
+  /** Private frozen publisher descriptor; does not offer or authorize installation. */
+  getDeploymentInstallRelease(): Promise<import('./deployment-install.js').DeploymentInstallRelease>;
   /** Owner identity is supplied by authenticated kernel ingress, never by browser code. */
   openDoctorControls(key: string, queue: RpcStub<DoctorHumanQueue>): Promise<DoctorControlSession>;
   /** Versioned factory: reject unless the session implementation supports these exact UI bytes. */
