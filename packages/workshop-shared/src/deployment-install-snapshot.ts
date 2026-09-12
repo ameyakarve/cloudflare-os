@@ -1,4 +1,5 @@
-import { deploymentInstallReleaseDigest, type DeploymentInstallRelease } from './deployment-install.js';
+import { deploymentInstallReleaseDigest, installationData, installationText,
+  validateDeploymentInstallRelease, type DeploymentInstallRelease } from './deployment-install.js';
 
 /** Bounded plain-file transport from the private frozen publisher, never a catalog archive or URL. */
 export interface DeploymentInstallSnapshot {
@@ -22,28 +23,54 @@ export interface DeploymentInstallSnapshotEnvelope {
   sha256: string;
 }
 
-function exactKeys(value: unknown, keys: string[]): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value) &&
-    Object.keys(value).length === keys.length && Object.keys(value).every(key => keys.includes(key));
+function projectSnapshot(input: unknown): DeploymentInstallSnapshot {
+  const text = (object: unknown, key: string, max: number, multiline = false) =>
+    installationText(installationData(object, key), max, multiline);
+  const output = installationData(input, 'output');
+  const files = installationData(input, 'files');
+  const value = {
+    releaseDigest: text(input, 'releaseDigest', 64),
+    blueprintId: text(input, 'blueprintId', 128),
+    title: text(input, 'title', 100),
+    output: { id: text(output, 'id', 128), title: text(output, 'title', 100) },
+    files: {
+      'README.md': text(files, 'README.md', 65_536, true),
+      'client.js': text(files, 'client.js', 65_536, true),
+      'server.js': text(files, 'server.js', 65_536, true),
+    },
+  };
+  if (!/^[a-f0-9]{64}$/.test(value.releaseDigest)) throw new Error('Installation snapshot is unavailable.');
+  return value;
 }
 
-/** Canonical bounded encoding. Reject unexpected selectors rather than silently stripping them. */
-export function encodeDeploymentInstallSnapshot(value: DeploymentInstallSnapshot): Uint8Array {
-  const text = (v: unknown, max: number) => typeof v === 'string' && v.length > 0 &&
-    v.length <= max && !Array.from(v).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
-  if (!exactKeys(value, ['releaseDigest', 'blueprintId', 'title', 'output', 'files']) ||
-      typeof value.releaseDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.releaseDigest) ||
-      !text(value.blueprintId, 128) || !text(value.title, 100) ||
-      !exactKeys(value.output, ['id', 'title']) || !text(value.output.id, 128) || !text(value.output.title, 100) ||
-      !exactKeys(value.files, ['README.md', 'client.js', 'server.js']) ||
-      Object.values(value.files).some(file => typeof file !== 'string' || !file.length || file.length > 65_536)) {
-    throw new Error('Installation snapshot is unavailable.');
+// Only receives the detached projection. Count canonical JSON UTF-8 bytes before creating
+// the JSON string or encoded copy, including escaping expansion of file control characters.
+function encodeOwned(value: DeploymentInstallSnapshot): Uint8Array {
+  const fields = [value.releaseDigest, value.blueprintId, value.title, value.output.id,
+    value.output.title, value.files['README.md'], value.files['client.js'], value.files['server.js']];
+  let size = 2 + fields.length * 2 + fields.length - 1;
+  for (const field of fields) {
+    for (let i = 0; i < field.length; i++) {
+      const code = field.charCodeAt(i);
+      if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) size += 2;
+      else if (code < 32) size += 6;
+      else if (code < 128) size++;
+      else if (code < 2048) size += 2;
+      else if (code >= 0xd800 && code <= 0xdbff) { size += 4; i++; }
+      else size += 3;
+      if (size > 196_608) throw new Error('Installation snapshot is unavailable.');
+    }
   }
-  const bytes = new TextEncoder().encode(JSON.stringify([value.releaseDigest, value.blueprintId,
-    value.title, value.output.id, value.output.title, value.files['README.md'],
-    value.files['client.js'], value.files['server.js']]));
-  if (bytes.byteLength > 196_608) throw new Error('Installation snapshot is unavailable.');
-  return bytes;
+  return new TextEncoder().encode(JSON.stringify(fields));
+}
+
+/** Canonical bounded encoding of a fixed-schema own-data projection.
+ * Unknown DTO extras (including path/binding selectors) are ignored, never accepted as files
+ * or authority. Known accessors/inherited fields fail. No caller graph is cloned/enumerated.
+ * Ordinary data and intact intrinsics are required; arbitrary Proxy traps are not bounded.
+ */
+export function encodeDeploymentInstallSnapshot(value: DeploymentInstallSnapshot): Uint8Array {
+  return encodeOwned(projectSnapshot(value));
 }
 
 /** Validate trusted transport and its exact reviewed descriptor before any workspace allocation.
@@ -52,14 +79,14 @@ export function encodeDeploymentInstallSnapshot(value: DeploymentInstallSnapshot
 export async function validateDeploymentInstallSnapshot(
   envelope: DeploymentInstallSnapshotEnvelope, release: DeploymentInstallRelease,
 ): Promise<DeploymentInstallSnapshot> {
-  if (!exactKeys(envelope, ['snapshot', 'sha256']) || typeof envelope.sha256 !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(envelope.sha256)) throw new Error('Installation snapshot is unavailable.');
-  // Copy before the first await so a local caller cannot change bytes during validation.
-  const bytes = encodeDeploymentInstallSnapshot(envelope.snapshot);
-  const snapshot = structuredClone(envelope.snapshot);
-  const expectedHash = envelope.sha256;
-  const releaseId = release.blueprintId;
-  const releaseDigest = await deploymentInstallReleaseDigest(release);
+  const expectedHash = installationText(installationData(envelope, 'sha256'), 64);
+  if (!/^[a-f0-9]{64}$/.test(expectedHash)) throw new Error('Installation snapshot is unavailable.');
+  // Observe each known caller property once, synchronously, before hashing can yield.
+  const snapshot = projectSnapshot(installationData(envelope, 'snapshot'));
+  const descriptor = validateDeploymentInstallRelease(release);
+  const bytes = encodeOwned(snapshot);
+  const releaseId = descriptor.blueprintId;
+  const releaseDigest = await deploymentInstallReleaseDigest(descriptor);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
   if (hash !== expectedHash || snapshot.releaseDigest !== releaseDigest || snapshot.blueprintId !== releaseId) {

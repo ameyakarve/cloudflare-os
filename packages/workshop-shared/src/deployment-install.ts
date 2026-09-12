@@ -49,27 +49,75 @@ export interface DeploymentInstallResult {
   releaseId: string;
 }
 
-/** Validate a private publisher response before storing or rendering any of its text. */
-export function validateDeploymentInstallRelease(value: DeploymentInstallRelease): void {
-  const keys = ['releaseId', 'protocol', 'blueprintId', 'artifact', 'uiSha256', 'factory',
-    'hostRuntime', 'title', 'explanation', 'confirmLabel'];
-  const text = (v: unknown, max: number) => typeof v === 'string' && v.length > 0 &&
-    v.length <= max && !Array.from(v).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127);
-  const id = (v: unknown) => text(v, 128) && /^[a-z0-9][a-z0-9.-]+$/.test(v as string);
-  if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).length !== keys.length || Object.keys(value).some(key => !keys.includes(key)) ||
-      !id(value.releaseId) || !id(value.blueprintId) ||
-      value.releaseId === value.blueprintId || !text(value.artifact, 200) ||
-      !/^[a-f0-9]{64}$/.test(value.uiSha256) || value.protocol !== 1 ||
-      value.factory !== 'doctor-controls-v1' || value.hostRuntime !== 'private-install-v1' ||
-      !text(value.title, 100) || !text(value.explanation, 1200) || !text(value.confirmLabel, 100)) {
+/** Read one fixed-schema own data property without executing accessors or enumerating extras.
+ * Requires ordinary local/RPC data and intact intrinsics; arbitrary Proxy traps are not bounded.
+ */
+export function installationData(value: unknown, key: string): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Installation release or snapshot is unavailable.');
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+    throw new Error('Installation release or snapshot is unavailable.');
+  }
+  return descriptor.value;
+}
+
+/** Bound source text before copying/encoding, reject invalid UTF-16 rather than replacing it. */
+export function installationText(value: unknown, max: number, multiline = false): string {
+  if (typeof value !== 'string' || !value.length || value.length > max) {
+    throw new Error('Installation release or snapshot is unavailable.');
+  }
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if ((!multiline && (code < 32 || code === 127)) ||
+        (code >= 0xdc00 && code <= 0xdfff)) {
+      throw new Error('Installation release or snapshot is unavailable.');
+    }
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const low = value.charCodeAt(++i);
+      if (!(low >= 0xdc00 && low <= 0xdfff)) {
+        throw new Error('Installation release or snapshot is unavailable.');
+      }
+    }
+  }
+  return value;
+}
+
+/** Project and validate private publisher data. Only the returned DTO may be stored/rendered.
+ * Unknown extras are ignored, never copied; known accessors/inherited fields are rejected.
+ */
+export function validateDeploymentInstallRelease(input: DeploymentInstallRelease): DeploymentInstallRelease {
+  const text = (key: string, max: number) => installationText(installationData(input, key), max);
+  const protocol = installationData(input, 'protocol');
+  const factory = installationData(input, 'factory');
+  const hostRuntime = installationData(input, 'hostRuntime');
+  if (protocol !== 1 || factory !== 'doctor-controls-v1' || hostRuntime !== 'private-install-v1') {
     throw new Error('Installation release is unavailable.');
   }
+  const value: DeploymentInstallRelease = {
+    releaseId: text('releaseId', 128),
+    protocol,
+    blueprintId: text('blueprintId', 128),
+    artifact: text('artifact', 200),
+    uiSha256: text('uiSha256', 64),
+    factory,
+    hostRuntime,
+    title: text('title', 100),
+    explanation: text('explanation', 1200),
+    confirmLabel: text('confirmLabel', 100),
+  };
+  if (!/^[a-z0-9][a-z0-9.-]+$/.test(value.releaseId) ||
+      !/^[a-z0-9][a-z0-9.-]+$/.test(value.blueprintId) ||
+      value.releaseId === value.blueprintId || !/^[a-f0-9]{64}$/.test(value.uiSha256)) {
+    throw new Error('Installation release is unavailable.');
+  }
+  return value;
 }
 
 /** Stable descriptor digest, including every rendered field and compatibility selector. */
-export async function deploymentInstallReleaseDigest(value: DeploymentInstallRelease): Promise<string> {
-  validateDeploymentInstallRelease(value);
+export async function deploymentInstallReleaseDigest(input: DeploymentInstallRelease): Promise<string> {
+  const value = validateDeploymentInstallRelease(input);
   const bytes = new TextEncoder().encode(JSON.stringify([value.releaseId, value.protocol,
     value.blueprintId, value.artifact, value.uiSha256, value.factory, value.hostRuntime,
     value.title, value.explanation, value.confirmLabel]));
