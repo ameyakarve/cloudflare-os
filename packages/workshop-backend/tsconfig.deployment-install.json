@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types"]
   },
-  "include": ["src", "__tests__/deployment-install.test.ts"]
+  "include": ["src", "__tests__/deployment-install.test.ts", "__tests__/deployment-install-quarantine.test.ts"]
 }

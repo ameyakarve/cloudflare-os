@@ -162,13 +162,13 @@ describe('unoffered deployment installation auth-root split', () => {
     });
   });
 
-  it('rejects oversized publisher text and unknown descriptor selectors before User preparation', async () => {
+  it('rejects oversized publisher text and projects away unknown publisher fields before preparation', async () => {
     await scenario(async ({root, changeRelease}) => {
       const a = await root.authenticateFromCfAccess();
       changeRelease({...release, title: 'x'.repeat(101)});
       await expect(a.prepareDeploymentInstall(release.releaseId)).rejects.toThrow('unavailable');
       changeRelease(Object.assign({...release}, {owner: 'forged'}));
-      await expect(a.prepareDeploymentInstall(release.releaseId)).rejects.toThrow('unavailable');
+      expect((await a.prepareDeploymentInstall(release.releaseId)).release).toEqual(release);
       changeRelease(release);
       expect((await a.prepareDeploymentInstall(release.releaseId)).release).toEqual(release);
       expect(await a.listGadgets()).toEqual([]);
