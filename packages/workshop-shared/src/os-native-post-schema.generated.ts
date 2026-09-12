@@ -1,8 +1,8 @@
 /** GENERATED ONLY by M/scripts/generate-os-native-post-contract.mjs. No authority.
- * Contract sha256:8c3b6fb50f5e6a445105cd4542cf97d5bbd65afb6e0291bc5e05f6fb62b2a6fe
+ * Contract sha256:5e9967dca20d259d1202bf1222df7b604dac0046831bd869ed2ad5db8b7795d6
  * package.json sha256:611c5f95aedf498d00bb1f9d315920f2054c899f37bd9ca83131d6aa7e54244d
  * pnpm-lock.yaml sha256:259507bf9e5bc30fb2d70edbd90c021eab2f1981c786c6fc8b2d4a6f6150177d
- * scripts/generate-os-native-post-contract.mjs sha256:aa22ae82b8feae388157460ae3c97c51227cda3ef1e0c8d67afa03eab751e540
+ * scripts/generate-os-native-post-contract.mjs sha256:8fda20f037ff3b5a682e45fc31f6bf2fffacd4acd586e59be92cd8f58d1fdb96
  * scripts/os-native-post-source-closure.json sha256:883f96d9bc6637080568cba3137495316683f86cc98a65a07790209f78f21ef5
  * src/durable/agent-prompt/index.ts sha256:6dd262e1b4a2823cff6bafb7ed95d0fb95199e3111f9e8f17951a817e0777eee
  * src/durable/agent-prompt/inline.generated.ts sha256:5234735a527a19f13184714b77f5e639bc77a8cecf8b3c0c49eeae5d43cee84b
@@ -125,7 +125,7 @@ export const NATIVE_HUMAN_LEAVES_V1 = {
   lookupPost: 1, stopCapture: 1, cancelReview: 0, dismissPrepared: 0, stop: 0,
 } as const
 /** Compatibility digest, never authority. */
-export const NATIVE_POST_CONTRACT_DIGEST = '8c3b6fb50f5e6a445105cd4542cf97d5bbd65afb6e0291bc5e05f6fb62b2a6fe' as const
+export const NATIVE_POST_CONTRACT_DIGEST = '5e9967dca20d259d1202bf1222df7b604dac0046831bd869ed2ad5db8b7795d6' as const
 const shapeData: { shapes: Record<string, Shape>; columns: Record<string, Column[]> } = {
   "shapes": {
     "NativeReviewViewV2": {
