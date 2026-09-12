@@ -1,3 +1,5 @@
+import { OverseerUsageLifecycle } from './overseer-usage-lifecycle.js';
+import type { UsageReceiverTicket } from './usage-acquisition-receiver.js';
 import type { SpecialistRecord } from '@gadgets/workshop-shared/specialists';
 import { parseSpecialists, specialistData, specialistOperation, SpecialistDispatcher, type SpecialistTools } from './specialists';
 import { doctorControlUiHash, type DoctorHumanQueue } from "@gadgets/workshop-shared/deployment-doctor-controls";
@@ -1740,6 +1742,8 @@ type SessionKind = CollaboratorRole | "owner";
 
 class OverseerImpl implements AgentHooks {
   public storage: OverseerStorage;
+  readonly usageLifecycle: OverseerUsageLifecycle;
+  #agentAlarmAt?: number;
   readonly logger: ReturnType<typeof createWorkshopLogger>;
 
   // Identifies this DO instance. Sent to chat subscribers so they can detect a full server
@@ -1751,6 +1755,7 @@ class OverseerImpl implements AgentHooks {
   #ownerId?: string;
   get ownerId(): string | undefined { return this.#ownerId; }
   set ownerId(value: string | undefined) {
+    this.usageLifecycle.setOwner(value);
     if (value !== this.#ownerId) this.privateUiEpoch++;
     this.#ownerId = value;
   }
@@ -1993,6 +1998,7 @@ class OverseerImpl implements AgentHooks {
   // Forcefully tear down all live state for a chat (e.g. on deletion).
   // Cancels any running agent, rejects all pending callbacks and returns.
   destroyLiveChat(chatId: number) {
+    this.usageLifecycle.closeExecution(chatId);
     let ctx = this.#liveChats.get(chatId);
     if (!ctx) return;
 
@@ -2032,7 +2038,8 @@ class OverseerImpl implements AgentHooks {
     this.#runningAgents.add(chatId);
     if (wasEmpty) {
       // Zero -> one running agents: schedule the keep-alive alarm.
-      this.ctx.storage.setAlarm(Date.now() + OverseerImpl.#AGENT_KEEPALIVE_ALARM_MS);
+      this.#agentAlarmAt = Date.now() + OverseerImpl.#AGENT_KEEPALIVE_ALARM_MS;
+      this.#updateExternalMessageResponseDeliveryAlarm();
     }
   }
 
@@ -2042,6 +2049,7 @@ class OverseerImpl implements AgentHooks {
   // the chat is observably idle, no stale records of the previous agent remain (which would
   // otherwise interfere if the user immediately starts a new agent).
   #unregisterRunningAgent(chatId: number) {
+    this.usageLifecycle.closeExecution(chatId);
     this.#runningAgents.delete(chatId);
     // Keep the stopped row as a callback/recovery fence until an explicit new turn replaces it.
     // Missing rows also fail execution identity checks, but would let callbacks create a new turn.
@@ -2058,7 +2066,26 @@ class OverseerImpl implements AgentHooks {
   }
 
   #updateExternalMessageResponseDeliveryAlarm(): void {
-    if (this.#runningAgents.size > 0) return;
+    this.ctx.blockConcurrencyWhile(() => this.updateSharedAlarm());
+  }
+
+  async serviceUsageAlarm(): Promise<void> {
+    if (this.#runningAgents.size > 0) {
+      this.#agentAlarmAt = Date.now() + OverseerImpl.#AGENT_KEEPALIVE_ALARM_MS;
+    }
+    await this.usageLifecycle.drain();
+    await this.ctx.blockConcurrencyWhile(() => this.updateSharedAlarm());
+  }
+
+  // Sole host alarm writer. Recompute inside the input gate, including after awaited writes.
+  async updateSharedAlarm(): Promise<void> {
+    const usageDue = this.usageLifecycle.journal.nextAlarm();
+    if (this.#runningAgents.size > 0) {
+      this.#agentAlarmAt ??= Date.now() + OverseerImpl.#AGENT_KEEPALIVE_ALARM_MS;
+      await this.ctx.storage.setAlarm(Math.min(this.#agentAlarmAt, usageDue ?? Infinity));
+      return;
+    }
+    this.#agentAlarmAt = undefined;
 
     // This DO has one alarm shared by agent keep-alive, response-target retry, and delivered-record sweep.
     // Recompute from storage whenever the alarm may have been overwritten by another concern.
@@ -2067,17 +2094,18 @@ class OverseerImpl implements AgentHooks {
     let hasReadyExternalMessageResponse = [...this.storage.gadgetResponseDeliveries.readyByIdempotencyKey.list({ limit: 1 })]
       .length > 0;
     if (hasReadyExternalMessageResponse) {
-      this.ctx.storage.setAlarm(Date.now());
+      await this.ctx.storage.setAlarm(Math.min(Date.now(), usageDue ?? Infinity));
       return;
     }
 
     let nextDeliveredRecord = [...this.storage.gadgetResponseDeliveries.deliveredByDeliveredAt.list({ limit: 1 })][0];
     if (nextDeliveredRecord?.status === "delivered") {
-      this.ctx.storage.setAlarm(nextDeliveredRecord.deliveredAt + AGENT_RESPONSE_DELIVERED_RETENTION_MS);
+      await this.ctx.storage.setAlarm(Math.min(nextDeliveredRecord.deliveredAt + AGENT_RESPONSE_DELIVERED_RETENTION_MS, usageDue ?? Infinity));
       return;
     }
 
-    this.ctx.storage.deleteAlarm();
+    if (usageDue !== undefined) await this.ctx.storage.setAlarm(usageDue);
+    else await this.ctx.storage.deleteAlarm();
   }
 
   #deleteExternalMessageResponseDeliveryRecord(record: ExternalMessageRecord): void {
@@ -2098,6 +2126,8 @@ class OverseerImpl implements AgentHooks {
 
   // Resolves once no agents are running. Used by `alarm()` to keep the DO alive until all running
   // agents complete.
+  get hasRunningAgents(): boolean { return this.#runningAgents.size > 0; }
+
   async waitForAllAgentsToComplete(): Promise<void> {
     if (this.#runningAgents.size === 0) return;
 
@@ -2155,7 +2185,22 @@ class OverseerImpl implements AgentHooks {
       pull: (gatekeeperId, oids, hints) => this.#pullGitObjects(gatekeeperId, oids, hints),
     });
     this.users = this.ctx.exports.UserDurableObject;
+    this.usageLifecycle = new OverseerUsageLifecycle(ctx.storage,
+      operation => ctx.blockConcurrencyWhile(operation),
+      () => this.#updateExternalMessageResponseDeliveryAlarm(),
+      async target => {
+        // Original User namespace and ID only; never resolve the current owner or renew access.
+        if (target.deployment !== 'UserDurableObject' || target.key !== target.owner) return false;
+        const ticket: UsageReceiverTicket = JSON.parse(target.ticket);
+        const user = this.users.get(this.users.idFromString(target.owner));
+        const status = await user.cancelDeploymentUsageAcquisitionV2(ticket);
+        return status === 'terminal';
+      });
     this.ownerId = this.storage.ownerId.get();
+    this.usageLifecycle.wake((chat, execution) => {
+      const record = this.storage.activeAgents.get(chat);
+      return record?.executionId === execution && !record.stopRequested;
+    });
 
     // Run any pending storage migration before anything else can touch storage. This must happen
     // in the constructor (not just open()) because the DO also wakes via constructor-driven
@@ -7269,6 +7314,7 @@ class OverseerImpl implements AgentHooks {
     if (rootChatId !== undefined && rootChatId !== chatId && this.#liveChats.get(rootChatId) === childRoot) {
       return this.cancelAgent(rootChatId);
     }
+    this.usageLifecycle.closeExecution(chatId);
     this.storage.agentContinuations.delete(chatId);
     const record = this.storage.activeAgents.get(chatId);
     const liveChat = this.#liveChats.get(chatId);
@@ -7480,6 +7526,7 @@ class OverseerImpl implements AgentHooks {
     }
     this.#registerRunningAgent(chatId);
     const executionId = crypto.randomUUID();
+    this.usageLifecycle.closeExecution(chatId);
     this.storage.agentContinuations.put({chatId, id: executionId});
     this.storage.activeAgents.put({
       chatId,
@@ -10675,6 +10722,7 @@ type OverseerRestoreParams = {
 
 export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
   private impl: OverseerImpl;
+  #usageAlarmAgentWaiter?: Promise<void>;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
@@ -10693,7 +10741,20 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
    *   the agents yet again.
    */
   async alarm() {
-    await this.impl.waitForAllAgentsToComplete();
+    // Cleanup must progress even while a live agent holds the legacy keepalive waiter.
+    await this.impl.serviceUsageAlarm();
+    if (this.impl.hasRunningAgents) {
+      // Never occupy the alarm event across a cleanup retry, including intents created
+      // AFTER this alarm started. Keep one legacy agent lifetime/delivery continuation.
+      if (!this.#usageAlarmAgentWaiter) {
+        this.#usageAlarmAgentWaiter = this.impl.waitForAllAgentsToComplete().then(() =>
+          this.impl.deliverReadyExternalMessageResponses()).finally(() => {
+            this.#usageAlarmAgentWaiter = undefined;
+          });
+        this.ctx.waitUntil(this.#usageAlarmAgentWaiter);
+      }
+      return;
+    }
     await this.impl.deliverReadyExternalMessageResponses();
   }
 
@@ -12086,9 +12147,14 @@ class OverseerClientInterface extends RpcTarget implements Overseer {
 
     await this.impl.ctx.blockConcurrencyWhile(async () => {
       await this.#owner.deleteGadget(this.impl.ctx.id.toString());
-      await this.impl.ctx.storage.deleteAll();
+      // Workspace data is typed-storage KV. Never delete the independent SQL usage
+      // fences/outbox: original-User cleanup must survive workspace deletion too.
+      this.impl.ctx.storage.transactionSync(() => {
+        this.impl.ownerId = undefined;
+        for (const [key] of this.impl.ctx.storage.kv.list()) this.impl.ctx.storage.kv.delete(key);
+      });
+      await this.impl.ctx.storage.sync();
       this.impl.scheduleAccessRestart("Gadget restarted because the workspace was deleted.");
-      this.impl.ownerId = undefined;
     });
 
     this.impl.logger.info("deleted workspace", {
