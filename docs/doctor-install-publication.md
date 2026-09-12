@@ -93,6 +93,9 @@ root abort, physical User reset, actual-bind ABA, expiry, access revoke and desc
 It checks guessed open/bundle/connect denial and empty lists until commit. Further cases cover
 two actual roots, concurrent confirmation, lost init/ready/commit/final ACK, User/target reopen,
 slot replacement, receipt deletion and expiry cleanup of an already committed ready target.
+An additional physical destination-reset fault pauses the alarm's receipt reply: the alarm
+rereads its exact local marker after that await and cannot resurrect removed state or run
+ordinary SQL cleanup through the stale pre-reset instance.
 
 No actual W/M/control-operation/human-click chain is claimed by this fixture. The successful
 installer host test intentionally has **no successful control factory**: missing pinned UI

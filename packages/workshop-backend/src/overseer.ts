@@ -10969,7 +10969,10 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
         if (await users.get(users.idFromString(quarantine.ticket.ownerId)).resolveDeploymentInstallPublication(quarantine.ticket)) {
           // Commit won: preserve content even if authority is now revoked. Ordinary lifecycle
           // owns this workspace; do not repeatedly schedule the expired quarantine deadline.
-          this.ctx.storage.kv.put(INSTALL_QUARANTINE_KEY, {...quarantine, state: 'published'});
+          const current = this.ctx.storage.kv.get<InstallQuarantineRecord>(INSTALL_QUARANTINE_KEY);
+          // Receipt lookup yielded. Never resurrect a deleted marker or overwrite a newer state.
+          if (current?.state !== 'ready' || JSON.stringify(current.ticket) !== JSON.stringify(quarantine.ticket)) return;
+          this.ctx.storage.kv.put(INSTALL_QUARANTINE_KEY, {...current, state: 'published'});
           await this.impl.updateSharedAlarm();
           return;
         }

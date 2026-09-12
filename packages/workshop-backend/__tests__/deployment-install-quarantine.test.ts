@@ -564,6 +564,36 @@ describe('actual auth-root -> User -> Overseer private publication', () => {
     });
   }
 
+  it('alarm receipt lookup cannot resurrect a destination reset while its reply is delayed', async () => {
+    await fixture(async ({publish, user, targets, ticket}) => {
+      vi.spyOn(OverseerDurableObject.prototype, 'resolveDeploymentInstallReady').mockRejectedValue(new Error('Hold final ACK'));
+      const result = await publish();
+      vi.restoreAllMocks();
+      const original = await ticket();
+      const state = {entered: false, resumed: false};
+      await runInDurableObject(user, u => {
+        const resolve = UserDurableObject.prototype.resolveDeploymentInstallPublication;
+        Object.setPrototypeOf(u, Object.create(Object.getPrototypeOf(u), {
+          resolveDeploymentInstallPublication: {value: async (admission: InstallQuarantineTicket, close = false) => {
+            const proof = resolve.call(u, admission, close);
+            state.entered = true;
+            while (!state.resumed) await new Promise(r => setTimeout(r, 1));
+            return proof;
+          }},
+        }));
+      });
+      const target = targets.get(targets.idFromString(result.workspaceId));
+      vi.spyOn(Date, 'now').mockReturnValue(original.expiresAt + 1);
+      const pending = runDurableObjectAlarm(target);
+      while (!state.entered) await new Promise(r => setTimeout(r, 1));
+      // Explicit physical-storage-reset fault, not an installer cancellation or human operation.
+      await runInDurableObject(target, async (_o, c) => {await c.storage.deleteAll();});
+      state.resumed = true;
+      await pending;
+      await runInDurableObject(target, (_o, c) => expect(c.storage.kv.get(INSTALL_QUARANTINE_KEY)).toBeUndefined());
+    });
+  });
+
   it('lost durable commit reply plus abort returns committed IDs; expiry alarm never deletes published content', async () => {
     await fixture(async ({publish, user, targets, ticket, abort}) => {
       const commit = UserDurableObject.prototype.publishDeploymentInstallAttempt;
