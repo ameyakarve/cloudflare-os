@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.native-post-human.json",
+  "include": ["src", "__tests__/native-post-chain", "../../../packages/custom-gatekeeper/src/native-post-*.ts", "vitest.native-post-chain.config.ts"]
+}

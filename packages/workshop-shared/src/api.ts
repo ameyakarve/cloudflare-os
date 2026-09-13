@@ -358,11 +358,12 @@ export const getAuthErrorCode = authErrors.getCode;
 
 /** Top-level API exposed to the user after they have authenticated. */
 export interface AuthenticatedApi extends RpcTarget {
-  /** Native trusted-host-only factory. Candidate is not authority. Currently unavailable even
-   * when the exact deployment gate is ON: only the root/owner/paired prerequisite is installed.
-   * Never exposed through Gadget, agent, iframe, saved source, export or share capabilities. */
+  /** Native trusted-host-only factory; candidate is not authority. Requires deployment-owned
+   * private bindings and exact pins. OFF permits current-authorized recovery only, never spending.
+   * One context attempt per root, including uncertain replies. Never exposed through Gadget,
+   * agent, iframe, saved source, export or share capabilities. */
   openNativePost(...args: [candidate: import('./deployment-native-post.js').NativePostOwnerCandidate,
-    ...forbidden: unknown[]]): Promise<import('./deployment-native-post.js').NativePostHostSession | null>;
+    ...forbidden: unknown[]]): Promise<import('./native-post-integration.js').NativePostSession | null>;
   /** One deployment-owned offering, or null while the deployment's default-OFF gate is closed. No preparation or installation. */
   getDeploymentInstallOffering(): Promise<import('./deployment-install.js').DeploymentInstallRelease | null>;
   /**

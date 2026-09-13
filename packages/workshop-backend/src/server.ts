@@ -1,6 +1,8 @@
 import { newWorkersRpcResponse } from "./rpc-session.js";
-import {NativePostRootLifetime, acquireNativePostContext} from './native-post-human.js';
-import type {NativePostOwnerCandidate, NativePostHostSession} from '@gadgets/workshop-shared/deployment-native-post';
+import {NativePostRootLifetime, acquireNativePostContext, nativePostEnvelope} from './native-post-human.js';
+import type {NativePostOwnerCandidate} from '@gadgets/workshop-shared/deployment-native-post';
+import type {NativePostSession} from '@gadgets/workshop-shared/native-post-integration';
+import {NATIVE_POST_CONTRACT_DIGEST} from '../../workshop-shared/src/os-native-post-schema.generated.js';
 import { deploymentAccessEnabled, DeploymentAccessError, readDeploymentAccess, watchDeploymentAccess } from "./deployment-access.js";
 import { RpcStub, RpcTarget } from "capnweb";
 import { validateRpc, skipRpcValidation } from "capnweb-validate";
@@ -107,24 +109,39 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
 
   #userId: DurableObjectId;
   #nativePost?: NativePostRootLifetime;
+  #nativeAttempted = false;
 
-  async [acquireNativePostContext](candidate: NativePostOwnerCandidate) {
+  async [acquireNativePostContext](candidate: NativePostOwnerCandidate, recoveryOnly = false) {
     this.#checkInstallLive(this.#installGeneration);
     this.#nativePost ??= new NativePostRootLifetime(this.env, this.#user, this.overseers,
       this.externalIdentityKey, this.sessionSignal);
-    return this.#nativePost.acquire(candidate);
+    return this.#nativePost.acquire(candidate, recoveryOnly);
   }
 
   // No arbitrary guard/callback/owner argument; exact arity includes native RPC negative controls.
   @skipRpcValidation()
-  async openNativePost(...args: [NativePostOwnerCandidate]): Promise<NativePostHostSession | null> {
+  async openNativePost(...args: [NativePostOwnerCandidate]): Promise<NativePostSession | null> {
     if (args.length !== 1 || !args[0] || typeof args[0] !== 'object') return null;
+    const factory = this.env.NATIVE_POST_APPLICATION;
+    const contract = this.env.NATIVE_POST_CONTRACT_DIGEST;
+    const renderer = this.env.NATIVE_POST_RENDERER_ARTIFACT_DIGEST;
+    if (!factory || contract !== NATIVE_POST_CONTRACT_DIGEST || !renderer || !/^[a-f0-9]{64}$/.test(renderer) || this.#nativeAttempted) return null;
+    // One context allocation attempt per authenticated transport root, including
+    // lost factory replies. Never allocate a replacement behind an unknown attempt.
+    this.#nativeAttempted = true;
     try {
-      using prerequisite = await this[acquireNativePostContext](args[0]);
-      await prerequisite.checkActive();
-      // LEG3 prerequisite split: no W issuer is attached, even with the deployment gate ON.
-      // Never return this guard/queue to the host and never call the private M service yet.
-      return null;
+      const guard = await this[acquireNativePostContext](args[0], this.env.NATIVE_POST_HUMAN_V2 !== 'true');
+      using root = new NativeRpcStub(guard);
+      const context = await guard[nativePostEnvelope](this.#installSession, String(this.#installGeneration), contract, renderer);
+      const session = await factory.openNativePost(context, {contextId: crypto.randomUUID(), humanVersion: 1,
+        reviewVersion: 2, effectVersion: 2, rendererVersion: 1, contractDigest: contract, rendererArtifactDigest: renderer}, root);
+      if (!session) return null;
+      try {
+        await root.checkCurrent();
+        if (this.env.NATIVE_POST_APPLICATION !== factory || this.env.NATIVE_POST_CONTRACT_DIGEST !== contract ||
+            this.env.NATIVE_POST_RENDERER_ARTIFACT_DIGEST !== renderer) throw new Error('Native Post is unavailable.');
+        return session;
+      } catch { try { await session.stop(); } finally { session[Symbol.dispose](); } return null; }
     } catch { return null; }
   }
 

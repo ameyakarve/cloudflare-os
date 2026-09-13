@@ -280,12 +280,21 @@ class NativePostOwnerQueue extends NativeRpcTarget {
     this.#epoch = impl.privateUiEpoch;
     this.#resource = impl.nativePostResource(owner, principal, workpiece);
   }
-  async checkActive(): Promise<void> {
+  async checkCurrent(): Promise<void> {
     if (this.#closed || this.#version !== this.impl.storage.codeVersion.get() ||
         this.#epoch !== this.impl.privateUiEpoch ||
         this.#resource !== this.impl.nativePostResource(this.owner, this.principal, this.workpiece)) {
       throw new Error('Native Post is unavailable.');
     }
+  }
+  async checkActive(): Promise<void> {
+    await this.checkCurrent();
+    if (this.impl.env.NATIVE_POST_HUMAN_V2 !== 'true') throw new Error('Native Post is unavailable.');
+  }
+  /** Exact retained canonical identity, not a caller-selectable resource. */
+  async getNativeIdentity() {
+    await this.checkCurrent();
+    return {resourceId: String(this.#resource), resourceGeneration: `${this.#epoch}:${this.#version}`};
   }
   // Exact no-argument native-return exception, not a class-wide validation exemption.
   @skipRpcValidation()
@@ -5643,7 +5652,7 @@ class OverseerImpl implements AgentHooks {
     const gadget = this.getGadgetRecord(workpiece);
     const edge = gadget.bindings.LEDGER;
     const resource = edge && this.storage.gatekeepers.get(edge.target);
-    if (this.env.NATIVE_POST_HUMAN_V2 !== 'true' || this.env.DEPLOYMENT_USAGE_REQUIRED !== 'true' ||
+    if (this.env.DEPLOYMENT_USAGE_REQUIRED !== 'true' ||
         !this.env.DEPLOYMENT_USAGE_V2_ROUTE || owner !== this.ownerId || gadget.type !== 'gadget' ||
         gadget.systemOutput !== 'ledger' || gadget.output?.id !== 'ledger' ||
         resource?.systemResource?.type !== 'ledger' || resource.systemResource.identityKey !== principal) {
