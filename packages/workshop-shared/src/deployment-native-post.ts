@@ -1,5 +1,5 @@
 /** GENERATED ONLY by M/scripts/generate-os-native-post-contract.mjs. No authority.
- * Contract sha256:28f33c30ddbf3d5308999dd440358a8504671817e4da4ce7493091b13936222a
+ * Contract sha256:00b9f34466a167630c40ccfcf51b7e50667e420d157789667d98b0bd7b7cad71
  * package.json sha256:611c5f95aedf498d00bb1f9d315920f2054c899f37bd9ca83131d6aa7e54244d
  * pnpm-lock.yaml sha256:259507bf9e5bc30fb2d70edbd90c021eab2f1981c786c6fc8b2d4a6f6150177d
  * scripts/generate-os-native-post-contract.mjs sha256:b72c57b62f3cafb74b0b248a8126311908d5ce67da58051c42110962b65ea918
@@ -45,10 +45,10 @@
  * src/durable/ledger-do.ts sha256:d5033cd0e6794d47a4e62d1cee71a39fc7aa6a75f08ec1ee5645c63b73ed69a6
  * src/durable/ledger-types.ts sha256:1aca581753d23599835597a3500f1d4bdb2e0a9e44331870dda0fdfa5d22d1ba
  * src/durable/native-canonical-admission.ts sha256:21a78f7c54454face59977e89e3f2a5ec2f8c22ea7e01048ae2643b6ae4f80c8
- * src/durable/native-capture-post-v2.ts sha256:0c729f6d8dd8516bcd33498d585f168f2dcd5619dc82ac1ea8b4b43b2c736131
+ * src/durable/native-capture-post-v2.ts sha256:2aa1ca8efd8a2eb44588ecdc04024640c80161440eb20b27f218e3de3c643953
  * src/durable/native-capture-post.ts sha256:a3fc36682ada4dd12a0b2e3905d34d1aaba26f5fa88bf52788f338c9d3023027
- * src/durable/native-capture-store.ts sha256:c534b2607182ddd9c11bce29bc5063fcc843b6672141c7ac41e6f36f363f36e4
- * src/durable/native-post-human-session-v2.ts sha256:21e84894436a545fe8603d57677ed08abfe910ab213ff54cf836a15059188c0a
+ * src/durable/native-capture-store.ts sha256:40b81c38177adf7f352d17833ab79f6a408998a828c8695b0a350184f652bedf
+ * src/durable/native-post-human-session-v2.ts sha256:3c61a702a82f85eb4f6b282e64220a0ef0c46bfd39f6608649f328fe7a30f439
  * src/durable/native-post-input-admission.ts sha256:55b5ad1c3619d6878d85ed43f690544dbf3526167b33566762102afcbfb04317
  * src/durable/native-review-v2.ts sha256:ceac62fca6ab01552f92a28fb4cb3ea923e1b3e9b67a4a36adf71a8bab4b3017
  * src/durable/os-budget-store.ts sha256:f3e1d34a604bc055a1a893f4889612f6bbe5d1b7f26b804ed9bbc3637571f8dc
