@@ -1,4 +1,6 @@
 import { newWorkersRpcResponse } from "./rpc-session.js";
+import {NativePostRootLifetime, acquireNativePostContext} from './native-post-human.js';
+import type {NativePostOwnerCandidate, NativePostHostSession} from '@gadgets/workshop-shared/deployment-native-post';
 import { deploymentAccessEnabled, DeploymentAccessError, readDeploymentAccess, watchDeploymentAccess } from "./deployment-access.js";
 import { RpcStub, RpcTarget } from "capnweb";
 import { validateRpc, skipRpcValidation } from "capnweb-validate";
@@ -81,6 +83,8 @@ type Env = Cloudflare.Env & {
 
 /** Kernel-local staging shape derived from the actual root, never part of the public RPC API. */
 export type DeploymentInstallQuarantineRoot = Pick<AuthenticatedApiImpl, typeof stageDeploymentInstallQuarantine | typeof publishDeploymentInstall>;
+/** Kernel-local native prerequisite, never an AuthenticatedApi RPC member. */
+export type NativePostContextRoot = Pick<AuthenticatedApiImpl, typeof acquireNativePostContext | typeof Symbol.dispose>;
 
 @validateRpc()
 class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
@@ -102,6 +106,28 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   private users: DurableObjectNamespace<UserDurableObject>;
 
   #userId: DurableObjectId;
+  #nativePost?: NativePostRootLifetime;
+
+  async [acquireNativePostContext](candidate: NativePostOwnerCandidate) {
+    this.#checkInstallLive(this.#installGeneration);
+    this.#nativePost ??= new NativePostRootLifetime(this.env, this.#user, this.overseers,
+      this.externalIdentityKey, this.sessionSignal);
+    return this.#nativePost.acquire(candidate);
+  }
+
+  // No arbitrary guard/callback/owner argument; exact arity includes native RPC negative controls.
+  @skipRpcValidation()
+  async openNativePost(...args: [NativePostOwnerCandidate]): Promise<NativePostHostSession | null> {
+    if (args.length !== 1 || !args[0] || typeof args[0] !== 'object') return null;
+    try {
+      using prerequisite = await this[acquireNativePostContext](args[0]);
+      await prerequisite.checkActive();
+      // LEG3 prerequisite split: no W issuer is attached, even with the deployment gate ON.
+      // Never return this guard/queue to the host and never call the private M service yet.
+      return null;
+    } catch { return null; }
+  }
+
   #installSession = crypto.randomUUID();
   #installClosed = false;
   #installAbort = () => this[Symbol.dispose]();
@@ -324,6 +350,7 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
   }
 
   [Symbol.dispose]() {
+    this.#nativePost?.close();
     this.sessionSignal?.removeEventListener('abort', this.#installAbort);
     this.#installClosed = true;
     ++this.#installGeneration;

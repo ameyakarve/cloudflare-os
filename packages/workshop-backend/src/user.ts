@@ -357,6 +357,25 @@ export class UserDurableObject extends DurableObject<Cloudflare.Env> {
     return this.identityIncarnation();
   }
 
+  /** Native root identity/registration snapshot; never uses the installer attempt slot. */
+  getNativePostIncarnation(principal: string, workspaceId: string): string {
+    const workspace = this.storage.gadgets.get(workspaceId);
+    if (this.storage.deploymentIdentity.get()?.storageKey !== principal || !workspace || workspace.owner) {
+      throw new Error('Native Post is unavailable.');
+    }
+    return this.identityIncarnation();
+  }
+
+  /** Final User check after policy awaits. A reset or real identity ABA cannot revive a root. */
+  async checkNativePostIdentity(principal: string, workspaceId: string, incarnation: string) {
+    const grant = await this.getDeploymentAccessGrant();
+    if (!grant || grant.validUntil <= Date.now() ||
+        this.getNativePostIncarnation(principal, workspaceId) !== incarnation) {
+      throw new Error('Native Post is unavailable.');
+    }
+    return grant.validUntil;
+  }
+
   private identityIncarnation(): string {
     let incarnation = this.ctx.storage.kv.get<string>('usage-identity-v2');
     if (!incarnation) this.ctx.storage.kv.put('usage-identity-v2', incarnation = crypto.randomUUID());

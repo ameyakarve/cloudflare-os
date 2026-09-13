@@ -266,6 +266,48 @@ class PrivateHumanQueueAdapter extends LedgerApplicationQueueAdapter implements 
   }
 }
 
+/** Kernel-only native owner queue. No observation/action/callback interface is exported. */
+@validateRpc()
+class NativePostOwnerQueue extends NativeRpcTarget {
+  #version: number;
+  #epoch: number;
+  #resource: number;
+  #closed = false;
+  constructor(private impl: OverseerImpl, private owner: string, private principal: string,
+      private workpiece: WorkpieceId) {
+    super();
+    this.#version = impl.storage.codeVersion.get();
+    this.#epoch = impl.privateUiEpoch;
+    this.#resource = impl.nativePostResource(owner, principal, workpiece);
+  }
+  async checkActive(): Promise<void> {
+    if (this.#closed || this.#version !== this.impl.storage.codeVersion.get() ||
+        this.#epoch !== this.impl.privateUiEpoch ||
+        this.#resource !== this.impl.nativePostResource(this.owner, this.principal, this.workpiece)) {
+      throw new Error('Native Post is unavailable.');
+    }
+  }
+  // Exact no-argument native-return exception, not a class-wide validation exemption.
+  @skipRpcValidation()
+  async getUsageBudget(...args: []): Promise<DeploymentUsageRun> {
+    if (args.length) throw new Error('Native Post is unavailable.');
+    await this.checkActive();
+    // Same actual user-operation queue and durable acquisition lifecycle as other owner controls.
+    using queue = new NativeRpcStub(new ApprovalQueueImpl(this.impl, this.#resource, {from: 'user'}));
+    const run = await queue.getUsageBudget!();
+    try {
+      await this.checkActive();
+      if (!run) throw new Error('Native Post is unavailable.');
+      return run;
+    } catch (error) {
+      // finish transfers to the durable original-route cleanup owner; disposal is not finish.
+      if (run) { try { await run.finish(); } finally { run[Symbol.dispose](); } }
+      throw error;
+    }
+  }
+  [Symbol.dispose]() { this.#closed = true; }
+}
+
 /** Stable persisted facet name; the deployment service owns editor behavior and authority. */
 export class LedgerEditorGatekeeper
     extends DurableObject<Cloudflare.Env, LedgerEditorGatekeeperProps>
@@ -5593,6 +5635,21 @@ class OverseerImpl implements AgentHooks {
     }
     let commitId = this.getGadgetHead(gadgetId);
     return commitId !== undefined ? await this.gitStore.readCommitFiles(commitId) : new Map();
+  }
+
+  /** Native eligibility is canonical owner/resource authority, never a Doctor marker or title. */
+  nativePostResource(owner: string, principal: string, workpiece: WorkpieceId): number {
+    this.assertInstallReady();
+    const gadget = this.getGadgetRecord(workpiece);
+    const edge = gadget.bindings.LEDGER;
+    const resource = edge && this.storage.gatekeepers.get(edge.target);
+    if (this.env.NATIVE_POST_HUMAN_V2 !== 'true' || this.env.DEPLOYMENT_USAGE_REQUIRED !== 'true' ||
+        !this.env.DEPLOYMENT_USAGE_V2_ROUTE || owner !== this.ownerId || gadget.type !== 'gadget' ||
+        gadget.systemOutput !== 'ledger' || gadget.output?.id !== 'ledger' ||
+        resource?.systemResource?.type !== 'ledger' || resource.systemResource.identityKey !== principal) {
+      throw new Error('Native Post is unavailable.');
+    }
+    return resource.id;
   }
 
   /** Live host fence: retained first-party capabilities cannot survive Stop or binding changes. */
@@ -11026,6 +11083,11 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
     return this.impl.outputsSnapshot();
   }
 
+  /** Private DO binding only; absent from Overseer/Gadget/agent/shared interfaces. */
+  openNativePostOwnerQueue(owner: string, principal: string, workpiece: WorkpieceId) {
+    return new NativePostOwnerQueue(this.impl, owner, principal, workpiece);
+  }
+
   /** Install or repair the first-class LEDGER binding on the owner's canonical Ledger output. */
   async configureMilesVaultLedgerOutput(ownerId: string, ledgerKey: string): Promise<void> {
     if (this.impl.ownerId !== ownerId) throw new Error("MilesVault Ledger output owner mismatch.");
@@ -11076,6 +11138,7 @@ export class OverseerDurableObject extends DurableObject<Cloudflare.Env> {
         this.impl.ctx.facets.delete(`gatekeeper${record.id}`);
         record.class = makeClass();
         systemResource.identityKey = ledgerKey;
+        this.impl.privateUiEpoch++; // Native retained owner contexts must reject identity A→B→A.
         this.impl.storage.gatekeepers.put(record);
       }
     }
