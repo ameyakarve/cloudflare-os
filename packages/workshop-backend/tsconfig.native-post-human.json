@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types", "node"]
+  },
+  "include": ["src", "__tests__/native-post-human", "vitest.native-post-human.config.ts"]
+}
