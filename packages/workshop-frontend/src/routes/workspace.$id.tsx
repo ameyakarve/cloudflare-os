@@ -22,7 +22,7 @@ export const Route = createFileRoute('/workspace/$id')({
   component: () => {
     const { id } = Route.useParams()
     const { w } = Route.useSearch()
-    return <>{nativePostEnabled() && w !== undefined && <div className="px-4 py-2 border-b border-kumo-line"><Link to="/native-post" search={{ workspaceId: id, workpieceId: String(w) }}>Open trusted Native Post</Link></div>}<GadgetEditor /></>
+    return <>{w !== undefined && <div className="px-4 py-2 border-b border-kumo-line"><Link to="/native-post" search={{ workspaceId: id, workpieceId: String(w) }}>{nativePostEnabled() ? 'Open trusted Native Post' : 'Recover Native Post receipt'}</Link></div>}<GadgetEditor /></>
   },
   validateSearch: (search: Record<string, unknown>): GadgetSearch => ({
     chat: typeof search.chat === 'number' ? search.chat

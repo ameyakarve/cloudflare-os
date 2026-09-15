@@ -14,10 +14,21 @@ type Locator = Parameters<NativePostSession['lookupPost']>[0]
 type Review = Awaited<ReturnType<typeof admitReview>> & { token: string }
 export type NativePostApi = Pick<RpcStub<AuthenticatedApi>, 'openNativePost'>
 
-/** Caller owns the stub; this component fences all in-flight paints and decisions on teardown. */
-export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
-  session: RpcStub<NativePostSession>; api: NativePostApi; candidate: NativePostOwnerCandidate; rendererPin: string
-}) => {
+type PanelProps = {
+  session: RpcStub<NativePostSession> | null; api: NativePostApi; candidate: NativePostOwnerCandidate; rendererPin: string
+}
+
+/** Caller owns the stub. Every session/root/candidate change retires all local decisions and paints. */
+export const NativePostPanel = (props: PanelProps) => {
+  const [owner, setOwner] = useState({ ...props, incarnation: 0 })
+  if (owner.session !== props.session || owner.api !== props.api || owner.candidate.workspaceId !== props.candidate.workspaceId || owner.candidate.workpieceId !== props.candidate.workpieceId || owner.rendererPin !== props.rendererPin) {
+    setOwner({ ...props, incarnation: owner.incarnation + 1 })
+    return null
+  }
+  return <NativePostPanelSession key={owner.incarnation} {...props} />
+}
+
+const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelProps) => {
   const [page, setPage] = useState<NativeCapturePage | null>(null)
   const [detail, setDetail] = useState<NativeCaptureDetail | null>(null)
   const [edits, setEdits] = useState<Record<number, string>>({})
@@ -27,7 +38,7 @@ export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
   const [receipt, setReceipt] = useState<NativeHumanReceiptResponseV1 | null>(null)
   const [recoveryOperation, setRecoveryOperation] = useState('')
   const [recoveryHash, setRecoveryHash] = useState('')
-  const [message, setMessage] = useState('Load captures to begin. Nothing posts automatically.')
+  const [message, setMessage] = useState(session ? 'Load captures to begin. Nothing posts automatically.' : 'Lookup-only recovery. Enter an earlier receipt locator; Prepare, Review and Confirm are unavailable.')
   const [busy, setBusy] = useState(false)
   const [blocked, setBlocked] = useState(false)
   const [stopped, setStopped] = useState(false)
@@ -52,12 +63,14 @@ export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
   }
   const refused = (reason: string) => { setMessage(`Request refused: ${literal(reason)}. No automatic retry.`) }
   const load = (cursor?: NonNullable<NativeCapturePage['next']>) => run(async current => {
+    if (!session) return
     const result = await session.listCaptures(cursor)
     if (!current()) return
     if (!result.ok) return refused(result.reason)
     setPage(projectNativeHumanListV1(result.value)); setMessage('Select a capture. This page replaces the previous page; no hidden accumulation.')
   })
   const select = (id: string) => run(async current => {
+    if (!session) return
     const result = await session.getCapture(id)
     if (!current()) return
     if (!result.ok) return refused(result.reason)
@@ -65,17 +78,29 @@ export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
     setDetail(value); setEdits({}); setReceipt(null); setLocator(null); setMessage('Choose unconsumed items and edit their exact journal text.')
   })
   const prepare = () => run(async current => {
-    if (!detail?.draft || blocked || handle || stopped) return
-    const input = projectNativeHumanSelectionV1({ capture: { id: detail.summary.id, revision: detail.summary.revision }, draftRevision: detail.draft.revision,
-      selection: Object.entries(edits).map(([index, editedText]) => ({ draftIndex: Number(index), editedText })) })
+    if (!session || !detail?.draft || blocked || handle || stopped) return
+    let input: ReturnType<typeof projectNativeHumanSelectionV1>
+    try {
+      input = projectNativeHumanSelectionV1({ capture: { id: detail.summary.id, revision: detail.summary.revision }, draftRevision: detail.draft.revision,
+        selection: Object.entries(edits).map(([index, editedText]) => ({ draftIndex: Number(index), editedText })) })
+    } catch {
+      setMessage('Selection rejected locally before Prepare was sent. Correct the selected text or explicitly refresh current capture detail. No automatic retry.')
+      return
+    }
     setBlocked(true); setMessage('Preparing. No Post has been requested.')
     const result = await session.prepareSelection(input)
     if (!current()) return
-    if (!result.ok) { refused(result.reason); return }
+    if (!result.ok) {
+      // Only the protocol's proved refusals release editing; unknown/unsupported replies do not.
+      if (result.ok === false && ['disabled', 'unavailable', 'unsupported', 'busy', 'expired', 'conflict'].includes(result.reason)) {
+        setBlocked(false); refused(result.reason)
+      } else setMessage('Prepare outcome unknown or response unsupported. Do not repost or prepare again. Close this session or check an earlier receipt locator.')
+      return
+    }
     setHandle(result.value); setMessage('Prepared. Open the complete Review explicitly. Editing is locked until this review is proved closed.')
   })
   const openReview = () => run(async current => {
-    if (!handle || stopped) return
+    if (!session || !handle || stopped) return
     const result = await session.reviewPrepared(handle)
     if (!current()) return
     if (!result.ok) return refused(result.reason)
@@ -90,10 +115,10 @@ export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
     const received = projectNativeHumanReceiptV1(value)
     if (!locator || received.result.receipt.binding.operation !== locator.operation || received.result.receipt.binding.bindingHash !== locator.bindingHash) throw new Error('Receipt mismatch')
     setReceipt(received); setReview(null); setHandle(null); setDetail(null); setEdits({}); setBlocked(false)
-    setMessage(`${received.result.receipt.selectedIndices.length} selected draft items posted; ${received.result.receipt.remaining} remain. Load the current capture for a fresh selection. Not a claim of full statement extraction.`)
+    setMessage(`${received.result.receipt.selectedIndices.length} selected draft items posted; ${received.result.receipt.remaining} remain. ${session ? 'Load the current capture for a fresh selection.' : 'Lookup-only recovery; new Post actions remain disabled.'} Not a claim of full statement extraction.`)
   }
   const confirm = () => {
-    if (!review || decision.current !== review.token || Date.now() >= review.response.evidence.deadline || stopped || lock.current) return
+    if (!session || !review || decision.current !== review.token || Date.now() >= review.response.evidence.deadline || stopped || lock.current) return
     const token = decision.current
     decision.current = null
     setReview(null)
@@ -106,7 +131,7 @@ export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
     })
   }
   const close = (dismiss: boolean) => {
-    if (!handle || lock.current) return
+    if (!session || !handle || lock.current) return
     decision.current = null; setReview(null)
     void run(async current => {
       const result = await (dismiss ? session.dismissPrepared(handle) : session.cancelReview(handle))
@@ -116,6 +141,7 @@ export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
     })
   }
   const stop = async () => {
+    if (!session) return
     // Stop can race an owning operation. It invalidates the UI immediately, not a claimed distributed lock.
     epoch.current++; decision.current = null; setReview(null); setStopped(true); setBlocked(true); setBusy(false); lock.current = false
     const generation = epoch.current
@@ -140,12 +166,12 @@ export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
   })
   const eligible = detail?.draft && ['complete', 'needs_review'].includes(detail.draft.outcome) &&
     ['needs_review', 'partially_posted'].includes(detail.summary.phase)
-  const frozen = busy || blocked || stopped || !!handle
+  const frozen = !session || busy || blocked || stopped || !!handle
   return <div className="space-y-6 min-w-0 [&_button]:whitespace-normal [&_button]:h-auto [&_button]:min-h-9 [&_button]:max-w-full [&_button]:[overflow-wrap:anywhere]">
     <div ref={status} tabIndex={-1} role="status" aria-live="polite" className="border border-kumo-line rounded p-4 [overflow-wrap:anywhere]">{message}</div>
     <div className="flex flex-wrap gap-3">
-      <Button disabled={frozen} onClick={() => void load()}>Load captures</Button>
-      <Button disabled={stopped} onClick={() => void stop()}>Stop session / cancel in-flight work</Button>
+      {session && <><Button disabled={frozen} onClick={() => void load()}>Load captures</Button>
+      <Button disabled={stopped} onClick={() => void stop()}>Stop session / cancel in-flight work</Button></>}
       <Button disabled={!locator || busy} onClick={() => void lookup()}>Check receipt (current authorization)</Button>
     </div>
     {!locator && !handle && <section className="space-y-3" aria-label="Recover an earlier receipt">
@@ -159,8 +185,9 @@ export const NativePostPanel = ({ session, api, candidate, rendererPin }: {
     {page && <section aria-label="Captures" className="space-y-3"><h2 className="text-xl font-semibold">Captures</h2>{page.rows.length === 0 && <p>No captures available.</p>}{page.rows.map(row => <div key={row.id} className="border border-kumo-line rounded p-3"><NativePostFields value={row} /><Button disabled={frozen} onClick={() => void select(row.id)}>Select capture {literal(row.id)}</Button></div>)}{page.next && <Button disabled={frozen} onClick={() => void load(page.next!)}>Next capture page</Button>}</section>}
     {detail && <section className="space-y-4" aria-label="Capture detail"><h2 className="text-xl font-semibold">Capture detail</h2><NativePostFields value={{ summary: detail.summary, source: detail.source, activeAttempt: detail.activeAttempt, postedIndices: detail.postedIndices, draftOutcome: detail.draft?.outcome, draftRevision: detail.draft?.revision, canonicalRevision: detail.draft?.canonicalRevision }} />
       {detail.draft?.entries.map((text, index) => <div key={index} className="border border-kumo-line rounded p-3 space-y-2"><Checkbox label={`Draft item ${index}${detail.postedIndices.includes(index) ? ' — already consumed' : ''}`} disabled={frozen || !eligible || detail.postedIndices.includes(index)} checked={Object.hasOwn(edits, index)} onCheckedChange={checked => setEdits(previous => { const next = { ...previous }; if (checked) next[index] = text; else delete next[index]; return next })} /><p className="whitespace-pre-wrap [overflow-wrap:anywhere]">Original literal: {literal(text)}</p>{Object.hasOwn(edits, index) && <label className="block">Exact edited text for item {index}<Textarea className="block w-full min-h-40 font-mono" disabled={frozen} value={edits[index]} onChange={event => setEdits({ ...edits, [index]: event.target.value })} /><span className="block [overflow-wrap:anywhere]">Edited literal: {literal(edits[index])}</span></label>}</div>)}
+      <Button disabled={frozen} onClick={() => void select(detail.summary.id)}>Refresh current capture detail (discards edits)</Button>
       {!eligible && <p>This capture is not eligible for native selection. Processing is not offered here.</p>}
-      <div className="flex flex-wrap gap-3"><Button disabled={frozen || !eligible || !Object.keys(edits).length} onClick={() => void prepare()}>Prepare selected items</Button><Button disabled={frozen} onClick={() => void run(async current => { setBlocked(true); const result = await session.stopCapture({ id: detail.summary.id, revision: detail.summary.revision }); if (current()) { setMessage(`Capture Stop: ${result.status}. Posted journal entries are not undone.`); setDetail(null); if (result.status === 'closed') setBlocked(false) } })}>Stop capture (not review Cancel)</Button></div>
+      <div className="flex flex-wrap gap-3"><Button disabled={frozen || !eligible || !Object.keys(edits).length} onClick={() => void prepare()}>Prepare selected items</Button><Button disabled={frozen} onClick={() => void run(async current => { if (!session) return; setBlocked(true); const result = await session.stopCapture({ id: detail.summary.id, revision: detail.summary.revision }); if (current()) { setMessage(`Capture Stop: ${result.status}. Posted journal entries are not undone.`); setDetail(null); if (result.status === 'closed') setBlocked(false) } })}>Stop capture (not review Cancel)</Button></div>
     </section>}
     {handle && <div className="flex flex-wrap gap-3"><Button disabled={busy || !!review || stopped || !!locator} onClick={() => void openReview()}>Open complete Review</Button><Button disabled={busy || stopped} onClick={() => close(false)}>Cancel review</Button><Button disabled={busy || stopped} onClick={() => close(true)}>Dismiss prepared review</Button></div>}
     {review && <><NativePostReview response={review.response} effects={review.effects} /><div className="border-t border-kumo-line pt-4 space-y-3"><p>Original decision deadline (epoch ms): {review.response.evidence.deadline}. {now >= review.response.evidence.deadline ? 'Expired — Confirm disabled.' : 'No auto-confirm or deadline renewal.'}</p><Button disabled={busy || stopped || now >= review.response.evidence.deadline} onClick={confirm}>Confirm exact Post once</Button></div></>}

@@ -10,12 +10,25 @@ import { nativePostEnabled } from '../../features/native-post/nativePostAdmissio
 export const NativePostConnection = ({ api, candidate, rendererPin }: {
   api: NativePostApi; candidate: NativePostOwnerCandidate; rendererPin: string
 }) => {
-  const [connection, setConnection] = useState<{ api: NativePostApi; workspaceId: string; workpieceId: string; session: RpcStub<NativePostSession> } | null>(null)
+  // A monotonic incarnation, not value equality, owns each root/candidate acquisition.
+  const [owner, setOwner] = useState({ api, workspaceId: candidate.workspaceId, workpieceId: candidate.workpieceId, rendererPin, incarnation: 0 })
+  if (owner.api !== api || owner.workspaceId !== candidate.workspaceId || owner.workpieceId !== candidate.workpieceId || owner.rendererPin !== rendererPin) {
+    setOwner({ api, workspaceId: candidate.workspaceId, workpieceId: candidate.workpieceId, rendererPin, incarnation: owner.incarnation + 1 })
+    return null
+  }
+  return <AcquiredNativePost key={owner.incarnation} api={api} candidate={candidate} rendererPin={rendererPin} />
+}
+
+const AcquiredNativePost = ({ api, candidate, rendererPin }: {
+  api: NativePostApi; candidate: NativePostOwnerCandidate; rendererPin: string
+}) => {
+  const [connection, setConnection] = useState<{ alive: boolean; session: RpcStub<NativePostSession> } | null>(null)
   const [failure, setFailure] = useState(false)
   const { workspaceId, workpieceId } = candidate
   useEffect(() => {
     let alive = true
-    let owned: RpcStub<NativePostSession> | null = null
+    let owned: { alive: boolean; session: RpcStub<NativePostSession> } | null = null
+    setConnection(null); setFailure(false)
     const release = (session: RpcStub<NativePostSession>) => {
       // Await cleanup without racing away server ownership; disposal is not a Stop acknowledgement.
       void Promise.resolve().then(() => session.stop()).catch(() => {}).finally(() => session[Symbol.dispose]())
@@ -25,14 +38,14 @@ export const NativePostConnection = ({ api, candidate, rendererPin }: {
         const session = await api.openNativePost({ workspaceId, workpieceId })
         if (!alive) { if (session) release(session); return }
         if (!session) { setFailure(true); return }
-        owned = session
-        setConnection({ api, workspaceId, workpieceId, session })
+        owned = { alive: true, session }
+        setConnection(owned)
       } catch { if (alive) setFailure(true) }
     })()
-    return () => { alive = false; if (owned) release(owned) }
+    return () => { alive = false; if (owned) { owned.alive = false; release(owned.session) } }
   }, [api, workspaceId, workpieceId])
   // Hide old account/context data during render, before effect cleanup runs.
-  if (!connection || connection.api !== api || connection.workspaceId !== workspaceId || connection.workpieceId !== workpieceId) {
+  if (!connection?.alive) {
     return <p role="status">{failure ? 'Native Post unavailable for this current owner context. No fallback or installation was attempted.' : 'Opening current-authorized native Post session…'}</p>
   }
   return <NativePostPanel session={connection.session} api={api} candidate={candidate} rendererPin={rendererPin} />
@@ -43,7 +56,9 @@ export const NativePostPage = ({ candidate }: { candidate: NativePostOwnerCandid
   return <main className="mx-auto w-full max-w-5xl p-4 sm:p-8 space-y-6 text-kumo-default bg-kumo-base min-w-0">
     <h1 className="text-2xl font-semibold">Native Post</h1>
     <p>Trusted Workshop host · select → Prepare → Review → explicit Confirm → receipt. No iframe approval.</p>
-    {!nativePostEnabled() ? <p>Native Post is disabled by deployment configuration.</p> : !candidate ? <p>Open Native Post from a selected workspace workpiece. A workspace/workpiece ID is only a lookup candidate, never authority.</p> :
-      <NativePostConnection api={authenticatedApi} candidate={candidate} rendererPin={import.meta.env.VITE_NATIVE_POST_RENDERER_ARTIFACT_DIGEST!} />}
+    {!nativePostEnabled() && <p>Native Post is disabled by deployment configuration. Current-authorized receipt recovery remains available; no new Post authority is granted.</p>}
+    {!candidate ? <p>Open Native Post from a selected workspace workpiece. A workspace/workpiece ID is only a lookup candidate, never authority.</p> : nativePostEnabled() ?
+      <NativePostConnection api={authenticatedApi} candidate={candidate} rendererPin={import.meta.env.VITE_NATIVE_POST_RENDERER_ARTIFACT_DIGEST!} /> :
+      <NativePostPanel session={null} api={authenticatedApi} candidate={candidate} rendererPin="" />}
   </main>
 }
