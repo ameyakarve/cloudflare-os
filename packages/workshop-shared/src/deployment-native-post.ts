@@ -1,10 +1,10 @@
 /** GENERATED ONLY by M/scripts/generate-os-native-post-contract.mjs. No authority.
- * Contract sha256:6744cc36bd5235b722c86d73a633cc172c239bf55b465088128ca0c468ffeedc
+ * Contract sha256:4aef36d8ea067ff1d20b5cf88b1d0e2ea1391776de8516044e788865820dc5b4
  * package.json sha256:7d4b33ede9d32c6ff790269242b0feb9b542b78ecaffaabb7c58ca2e5594ae96
  * pnpm-lock.yaml sha256:259507bf9e5bc30fb2d70edbd90c021eab2f1981c786c6fc8b2d4a6f6150177d
- * scripts/generate-os-native-post-contract.mjs sha256:56c2bdc9c988fd4b4e278d13f16606638c7ef4ffa3b5a3d310c4a1059d3fd996
+ * scripts/generate-os-native-post-contract.mjs sha256:af64c1b0a4632472c169f8a6fc7c0f22913ba615c4b99f19aed0b043ab67e822
  * scripts/inject-do.mjs sha256:4bfb6dfece71dc914fe1cea9ffa28e742c39b782b159eb63563e1ff763e169d5
- * scripts/os-native-post-source-closure.json sha256:ed7192f878f0882223df105bc584a99e88d0242b1e5a2651843d0a364eca85a0
+ * scripts/os-native-post-source-closure.json sha256:0a5f9e348772ebddab7d9c1fc773836f816b3b5796556b27eb53c0fcd1300254
  * src/durable/agent-prompt/index.ts sha256:6dd262e1b4a2823cff6bafb7ed95d0fb95199e3111f9e8f17951a817e0777eee
  * src/durable/agent-prompt/inline.generated.ts sha256:5234735a527a19f13184714b77f5e639bc77a8cecf8b3c0c49eeae5d43cee84b
  * src/durable/agent-ui-schemas.ts sha256:bc58c7195b8f67a8d2e12e752fed77295c3349d742399e6fda7639a02886a52c
@@ -43,17 +43,19 @@
  * src/durable/ingest/pass1-prompt.ts sha256:73ae1197ffce97f220a5d5b97828967a93a837648f0679a7392ecfbaa2391b25
  * src/durable/ingest/pipeline.ts sha256:35b600aa3e264305801ce46c48d5d5930defead556a657de166b4c7038cafc84
  * src/durable/journal-proposal-retention.ts sha256:20b82d77e1c62ea857de79cb39e304a59c694ad658edcf33895491cb3638bafe
- * src/durable/ledger-do.ts sha256:5e0b1a416ff426482ac1e5fbee52a758407de666e1a555bb71276c1da3ebb998
- * src/durable/ledger-do.ts sha256:5e0b1a416ff426482ac1e5fbee52a758407de666e1a555bb71276c1da3ebb998
+ * src/durable/ledger-do.ts sha256:7315a01324aab89f349ded12323bcd0d036e802984fe86a1bb6865210e4c4fb4
+ * src/durable/ledger-do.ts sha256:7315a01324aab89f349ded12323bcd0d036e802984fe86a1bb6865210e4c4fb4
  * src/durable/ledger-types.ts sha256:1aca581753d23599835597a3500f1d4bdb2e0a9e44331870dda0fdfa5d22d1ba
  * src/durable/native-canonical-admission.ts sha256:21a78f7c54454face59977e89e3f2a5ec2f8c22ea7e01048ae2643b6ae4f80c8
  * src/durable/native-capture-post-v2.ts sha256:e6b652d1c024fb350df88b164a28ba7e41f044b7fde13e955c04eb7214cadd11
  * src/durable/native-capture-post.ts sha256:a3fc36682ada4dd12a0b2e3905d34d1aaba26f5fa88bf52788f338c9d3023027
- * src/durable/native-capture-store.ts sha256:0ef577468d994f2f01d1d3327dce63a4f99f4b30e2265ee5dce1eb295f86b65e
- * src/durable/native-post-human-installation-v1.ts sha256:8822e9b41c511d2123f5dde8f7cc789dc9e6d72920e3e0a18f9892af99b50102
- * src/durable/native-post-human-session-v2.ts sha256:9ac5966f2ed0b877600177036aec9ac5c595b6373550cdd739e895a67f5e451e
+ * src/durable/native-capture-store.ts sha256:e835edd8a908cb5e38bd5231b2d39efa3115d1c98ccff75fe293424d741b584d
+ * src/durable/native-post-human-installation-v1.ts sha256:b3ab93242e0725c6ca89a82ae602fcf07d924e57d931542e168886e6de8cc452
+ * src/durable/native-post-human-session-v2.ts sha256:09a59525cd177f52499fa40c44aa959d5339eb709fee4d7774f494f8c845d7b5
  * src/durable/native-post-input-admission.ts sha256:55b5ad1c3619d6878d85ed43f690544dbf3526167b33566762102afcbfb04317
  * src/durable/native-review-v2.ts sha256:ceac62fca6ab01552f92a28fb4cb3ea923e1b3e9b67a4a36adf71a8bab4b3017
+ * src/durable/native-statement-processor.ts sha256:cb2945ff3d789d816766ef1709b25b4467087f2ea6ac9a6c642a11b2a6396255
+ * src/durable/native-statement-runtime.ts sha256:708560cf9dcf7078273657ebd800b1854e113f7e46a375d1b619599df47a9de7
  * src/durable/os-budget-store.ts sha256:f3e1d34a604bc055a1a893f4889612f6bbe5d1b7f26b804ed9bbc3637571f8dc
  * src/durable/reminder-reconcile.ts sha256:18fbf63e2299f4c022784bd27e01244282083b8b8902d2d757fd943f196c38e2
  * src/durable/reminders.ts sha256:1ead0931e1fe0d5b8c48d2fb0fab86cf8cee2bcf3e770dd0291fb5fbc9216344
@@ -84,8 +86,8 @@
  * src/lib/ledger-core/rename-opens.ts sha256:a25821b725eec2f18373c9c61b0e79a52d337d2a53092dcd864b94fbd3946ec2
  * src/lib/ledger-core/rename-scope.ts sha256:c478c02bb14b27ef485c046aeb22fad4e26a9bcedabb8654bec46e8b622db36e
  * src/lib/ledger-core/schema.ts sha256:f2105927e82fe2ae387ed87d00f84974c0f12b2981c6bd9438d0df584fd2e46c
- * src/lib/native-review-schema-v2.shape.json sha256:e30070ade3bc22c54c700c1bbc7c12aad4d23c8d6ca52654af1a8511d9acc6af
- * src/lib/native-review-schema-v2.ts sha256:a083596e0f67b83bfba3e32b1cc2bccfd98ec69fbcb9bb256c3781daa057a4d4
+ * src/lib/native-review-schema-v2.shape.json sha256:231b9890cf9776682e0fec91c6d2bb7297ef0d53b910e8c8520dc84943e52a55
+ * src/lib/native-review-schema-v2.ts sha256:d984b01f76904ee4632006135bc30898ea9dc78e2166a3e9f271500138d0cb12
  * src/lib/os-budget.ts sha256:5da8246a177b5d7987dc0859fcf76d5eea1855fd676c3acfcdc8a242a4bf7245
  * src/lib/os-doctor-contract.ts sha256:92cf9fa36fc7d4c15d0dc5463d7f51ebb1fe9cbd4ff369603175ac47a62fb017
  * src/lib/os-doctor-control-contract.ts sha256:685be5a10e5274eeb5e25bb58fe77119b9e568e274714d5ee622ee6b32843632
@@ -96,7 +98,7 @@
  * src/lib/os-editor-budget.ts sha256:c8de6fe6a76b22cf4c9a273c60f43fe4fa1e6dbef10e74240e392891a911eca1
  * src/lib/os-native-capture-contract.ts sha256:91920b00364248111e0d751dc168c65450e40e2f3c55a79e152bff5a0de9020e
  * src/lib/os-native-capture-sql.ts sha256:c625dcda1a28ff87acae1af520d9907b9d892571a02945d4b154baee70f15d64
- * src/lib/os-native-post-human-contract.ts sha256:bfdb57fe6170b6577b7d54522fe812e6d1834715ecdb1a73f41df09d8465a9d3
+ * src/lib/os-native-post-human-contract.ts sha256:ad912298ef82e7a61bc9d72ac0bd5aa18ca40ec32a691f2177690fe25ad34c0a
  * src/lib/os-usage-acquisition-v2.ts sha256:0936db31f061540181703073cca49dd7f6bcd80084200456d5816b897147fb7e
  * src/lib/os-vault-contract.ts sha256:30b0c41edbfd4ab83fb5f9f7e409f47de68b3e1e2c13e17180ab54fc48b97e62
  * src/lib/os-vault-projection.ts sha256:2023748d4dae7357e28c38682ec0d949ea25fdb84930c18e8b0b7e859197b23a
@@ -114,7 +116,7 @@
 import type { NativePostCanonicalApi } from './os-native-post.generated'
 /** Future trusted host UI session derives requests/results from M, never a W protocol copy.
  * The private M service is installed. K/W authenticated-root factory remains unavailable. */
-export type NativePostHostSession = Pick<NativePostCanonicalApi, 'listCaptures' | 'getCapture' | 'prepareSelection' | 'reviewPrepared' | 'confirm' | 'cancelReview' | 'dismissPrepared' | 'stopCapture' | 'stop' | 'lookupPost'>
+export type NativePostHostSession = Pick<NativePostCanonicalApi, 'listCaptures' | 'getCapture' | 'addStatement' | 'processStatement' | 'prepareSelection' | 'reviewPrepared' | 'confirm' | 'cancelReview' | 'dismissPrepared' | 'stopCapture' | 'stop' | 'lookupPost'>
 /** Lookup candidate only, not owner/resource authority. */
 export type NativePostOwnerCandidate = { workspaceId: string; workpieceId: string }
 /** Proposed root-only factory signature; not wired or exported from AuthenticatedApi. */
