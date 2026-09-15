@@ -131,9 +131,13 @@ describe('independent UI adversaries', () => {
     await click('Check receipt')
     expect(opener).toHaveBeenCalledExactlyOnceWith(candidate)
     expect(container.textContent).toContain('Post receipt and remainder')
-    expect(f.counts.lookups).toBe(1); expect(f.counts.disposals).toBe(1)
+    await click('Check receipt')
+    expect(opener).toHaveBeenCalledTimes(1)
+    expect(f.counts.lookups).toBe(2); expect(f.counts.disposals).toBe(0)
     expect(f.counts.prepares).toBe(1); expect(f.counts.confirms).toBe(1)
     for (const label of ['Load captures', 'Prepare selected', 'Open complete Review', 'Confirm exact Post']) expect(container.textContent).not.toContain(label)
+    await act(async () => root.render(<div>replacement</div>))
+    expect(f.counts.disposals).toBe(1)
   })
   it('double click cannot dispatch a second Confirm', async () => {
     const f = await mount(); await review()
@@ -160,11 +164,30 @@ describe('independent UI adversaries', () => {
     const spy = vi.spyOn(JSON, 'parse')
     try { await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow(); expect(spy).not.toHaveBeenCalled() } finally { spy.mockRestore() }
   })
-  it('late lookup acquisition is disposed after unmount and cannot lookup', async () => {
+  it('retired session lookup cannot paint a receipt into a replacement panel', async () => {
     const f = await mount('lost-reply'); await review(); await click('Confirm exact Post once')
-    const fresh = syntheticApi(); let release!: () => void
-    f.api.openNativePost = (async () => { await new Promise<void>(r => { release = r }); return fresh.session }) as never
+    let release!: () => void
+    const original = f.methods.lookupPost
+    f.methods.lookupPost = async () => { await new Promise<void>(r => { release = r }); return original() }
     await click('Check receipt')
+    const next = syntheticApi()
+    await act(async () => root.render(<NativePostPanel {...next} candidate={candidate} rendererPin={rendererPin} />))
+    await act(async () => release()); await flush()
+    expect(container.textContent).not.toContain('Post receipt and remainder')
+    expect(container.textContent).toContain('Load captures')
+  })
+  it('late lookup acquisition is disposed after unmount and cannot lookup', async () => {
+    const f = syntheticApi(), fresh = syntheticApi(); let release!: () => void
+    f.api.openNativePost = (async () => { await new Promise<void>(r => { release = r }); return fresh.session }) as never
+    await act(async () => root.render(<NativePostPanel {...f} session={null} candidate={candidate} rendererPin="" />))
+    const inputs = container.querySelectorAll('input')
+    await act(async () => {
+      for (const [input, value] of [[inputs[0], 'historical'], [inputs[1], 'a'.repeat(64)]] as const) {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+    })
+    await click('Use lookup-only locator'); await click('Check receipt')
     await act(async () => root.render(<div>replacement</div>))
     await act(async () => release()); await flush()
     expect(fresh.counts.lookups).toBe(0); expect(fresh.counts.disposals).toBe(1)

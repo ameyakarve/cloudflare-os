@@ -50,11 +50,14 @@ describe('production native Post UI with synthetic API (not native composition)'
     expect(container.textContent).not.toContain('Confirm exact Post once')
     expect(f.counts.confirms).toBe(0)
   })
-  it('lost Confirm reply uses new current-authorized lookup, never repeat confirmation', async () => {
+  it('lost Confirm reply reuses the current-authorized session, never reopening the latched root', async () => {
     const f = await mount('lost-reply'); await review(); await click('Confirm exact Post once')
     expect(container.textContent).toContain('Outcome unknown')
+    const opener = vi.spyOn(f.api, 'openNativePost').mockResolvedValue(null)
     await click('Check receipt'); expect(f.counts.lookups).toBe(1); expect(f.counts.confirms).toBe(1)
     expect(container.textContent).toContain('Post receipt and remainder')
+    expect(opener).not.toHaveBeenCalled()
+    expect(f.counts.disposals).toBe(0) // Connection, not lookup, owns this stub.
   })
   it.each(['Cancel review', 'Dismiss prepared review'])('%s closes before allowing edits', async label => {
     const f = await mount(); await review(); await click(label)
