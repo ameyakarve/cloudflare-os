@@ -1,5 +1,5 @@
 /** GENERATED ONLY by M/scripts/generate-os-native-post-contract.mjs. No authority.
- * Contract sha256:d5e6d6fa998d5879c471bcda5dfc775858b3af99eb8ef6d54c517a60425a2a02
+ * Contract sha256:5b49a2a8d40c88d2c3dcdbacb216dcab196ff38c26d3fee557a7df2f544e1162
  * package.json sha256:7d4b33ede9d32c6ff790269242b0feb9b542b78ecaffaabb7c58ca2e5594ae96
  * pnpm-lock.yaml sha256:259507bf9e5bc30fb2d70edbd90c021eab2f1981c786c6fc8b2d4a6f6150177d
  * scripts/generate-os-native-post-contract.mjs sha256:fa014f1c70e2d76b1fdcb8979f865c97b8501f802be1103f5a78d9340637199f
@@ -44,15 +44,15 @@
  * src/durable/ingest/pass1-prompt.ts sha256:73ae1197ffce97f220a5d5b97828967a93a837648f0679a7392ecfbaa2391b25
  * src/durable/ingest/pipeline.ts sha256:35b600aa3e264305801ce46c48d5d5930defead556a657de166b4c7038cafc84
  * src/durable/journal-proposal-retention.ts sha256:20b82d77e1c62ea857de79cb39e304a59c694ad658edcf33895491cb3638bafe
- * src/durable/ledger-do.ts sha256:7315a01324aab89f349ded12323bcd0d036e802984fe86a1bb6865210e4c4fb4
- * src/durable/ledger-do.ts sha256:7315a01324aab89f349ded12323bcd0d036e802984fe86a1bb6865210e4c4fb4
+ * src/durable/ledger-do.ts sha256:fd8a1c7d8f79542a7265cee85f948ea338201ba904508eaebdaa38b6c2fec516
+ * src/durable/ledger-do.ts sha256:fd8a1c7d8f79542a7265cee85f948ea338201ba904508eaebdaa38b6c2fec516
  * src/durable/ledger-types.ts sha256:1aca581753d23599835597a3500f1d4bdb2e0a9e44331870dda0fdfa5d22d1ba
  * src/durable/native-canonical-admission.ts sha256:21a78f7c54454face59977e89e3f2a5ec2f8c22ea7e01048ae2643b6ae4f80c8
- * src/durable/native-capture-post-v2.ts sha256:97fb5f42ee22b85d8ca3051b3b844cebf16e7a169ff342694708cfc84f507682
+ * src/durable/native-capture-post-v2.ts sha256:58ce3871d8e01cb9393c0574267af5be319078fa3ca9b7ff3a5efe682eef22e1
  * src/durable/native-capture-post.ts sha256:a3fc36682ada4dd12a0b2e3905d34d1aaba26f5fa88bf52788f338c9d3023027
  * src/durable/native-capture-store.ts sha256:712ceeddccc38617087de290050230fe8e2e38130d1a3dc4050a301de3d3c4b7
  * src/durable/native-post-human-installation-v1.ts sha256:d67e834f5a52b8d1c25ae96fb46dbe56c2ddee149bf6afe1645b19512602b473
- * src/durable/native-post-human-session-v2.ts sha256:25f6eb1aaf2b1aedf536c1fb7a82d70c300284b5640a947a035e4bc02dee6ab2
+ * src/durable/native-post-human-session-v2.ts sha256:247dbd14d338790e2ce44ffc3a3de2f6789de300dbb9a9366a99953861fdc2bf
  * src/durable/native-post-input-admission.ts sha256:55b5ad1c3619d6878d85ed43f690544dbf3526167b33566762102afcbfb04317
  * src/durable/native-review-v2.ts sha256:ceac62fca6ab01552f92a28fb4cb3ea923e1b3e9b67a4a36adf71a8bab4b3017
  * src/durable/native-review-v3.ts sha256:be48879df5e0fa212da6f2a43d6d7400ad368d17ac22bf44f939d28806491644
@@ -90,7 +90,7 @@
  * src/lib/ledger-core/rename-scope.ts sha256:c478c02bb14b27ef485c046aeb22fad4e26a9bcedabb8654bec46e8b622db36e
  * src/lib/ledger-core/schema.ts sha256:f2105927e82fe2ae387ed87d00f84974c0f12b2981c6bd9438d0df584fd2e46c
  * src/lib/native-review-schema-v2.shape.json sha256:231b9890cf9776682e0fec91c6d2bb7297ef0d53b910e8c8520dc84943e52a55
- * src/lib/native-review-schema-v2.ts sha256:195d1cd57e51ed2550d90f8c3baf1aef97d02cd568bda5a3c9271617de07bab2
+ * src/lib/native-review-schema-v2.ts sha256:a50d5a43b3b71219456d95c74d3d192683543bcda95abaed48363b2059f3d8be
  * src/lib/native-review-schema-v3.shape.json sha256:639e87bc0bd42b88650c0d1f2bfb661892904e93fd6e7dbf31ab584150ec0283
  * src/lib/os-budget.ts sha256:5da8246a177b5d7987dc0859fcf76d5eea1855fd676c3acfcdc8a242a4bf7245
  * src/lib/os-doctor-contract.ts sha256:92cf9fa36fc7d4c15d0dc5463d7f51ebb1fe9cbd4ff369603175ac47a62fb017
