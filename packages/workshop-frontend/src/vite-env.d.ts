@@ -1,6 +1,9 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  // Deployment-owned, default OFF. Pin is never accepted from an RPC response or URL.
+  readonly VITE_NATIVE_POST_HUMAN_V2?: string;
+  readonly VITE_NATIVE_POST_RENDERER_ARTIFACT_DIGEST?: string;
   // Override the local backend host used by Vite dev, e.g. "localhost:9000".
   readonly VITE_BACKEND_HOST?: string;
 

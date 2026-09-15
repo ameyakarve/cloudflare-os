@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "types": ["node", "vite/client"] },
+  "include": ["./fixture.ts", "./main.tsx", "./vite.config.ts", "../src/vite-env.d.ts"]
+}
