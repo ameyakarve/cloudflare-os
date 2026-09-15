@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite'
 import { vitestTask } from '@gadgets/scripts/vitest-task'
+import { nativeStatementReaderPlugin } from './nativeStatementReaderPlugin'
 
 // `dist/` is this package's own build output, excluded from the inputs of the bundle and test
 // tasks: vp declines to cache a task that reads a path it also wrote. Package-relative rather than
@@ -70,12 +71,18 @@ export default defineConfig(({ mode }) => {
     // Spread, not a literal `run: {...}`: `run` is Vite+'s field and vite's own `defineConfig` has
     // no such property, but the excess-property check doesn't reach spreads.
     ...runConfig,
+    // An external M-owned reader can change without its path changing. Do not replay a stale bundle.
+    ...(env.VITE_NATIVE_STATEMENT_READER_PATH ? { run: { tasks: { ...runConfig.run.tasks,
+      build: { ...runConfig.run.tasks.build, cache: false },
+      'build:assets': { ...runConfig.run.tasks['build:assets'], cache: false },
+    } } } : {}),
     base: env.VITE_BASE_PATH?.trim() || '/',
     // Shared editor extensions must use the same class instances as the app editor.
     resolve: { dedupe: ['@codemirror/state', '@codemirror/view', '@codemirror/language', '@lezer/common', '@lezer/highlight', '@lezer/lr'] },
     plugins: [
       TanStackRouterVite({ target: 'react', autoCodeSplitting: true }),
       react(),
+      nativeStatementReaderPlugin(env.VITE_NATIVE_STATEMENT_READER_PATH),
       tailwindcss(),
       tsconfigPaths(),
     ],

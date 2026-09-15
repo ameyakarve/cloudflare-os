@@ -8,6 +8,9 @@ import type { NativeCaptureDetail, NativeCapturePage, NativeHumanReceiptResponse
 import { decodeNativeHumanDetailV1, projectNativeHumanDetailV1, projectNativeHumanListV1, projectNativeHumanReceiptV1, projectNativeHumanSelectionV1 } from '@gadgets/workshop-shared/os-native-post-schema.generated'
 import { admitReview } from './nativePostAdmission'
 import { literal, NativePostFields, NativePostReview } from './NativePostReview'
+import { NativeStatementUpload } from './NativeStatementUpload'
+import type { NativeStatementInput } from './nativeStatementSource'
+import { readNativeDetail, useNativeStatementPoll } from './useNativeStatementPoll'
 
 type Handle = Parameters<NativePostSession['reviewPrepared']>[0]
 type Locator = Parameters<NativePostSession['lookupPost']>[0]
@@ -42,6 +45,7 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
   const [busy, setBusy] = useState(false)
   const [blocked, setBlocked] = useState(false)
   const [stopped, setStopped] = useState(false)
+  const [startingProcessor, setStartingProcessor] = useState(false)
   const [now, setNow] = useState(Date.now())
   const epoch = useRef(0)
   const lock = useRef(false)
@@ -49,18 +53,21 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
   const recovery = useRef<RpcStub<NativePostSession> | null>(null)
   const recoveryAttempted = useRef(false)
   const status = useRef<HTMLDivElement>(null)
+  const pollingMessage = useNativeStatementPoll(session, detail, busy || blocked || stopped || !!handle, value => {
+    if (!lock.current) { setDetail(value); setEdits({}) }
+  })
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 250)
     return () => { clearInterval(timer); epoch.current++; decision.current = null; recovery.current?.[Symbol.dispose](); recovery.current = null }
   }, [])
 
-  const run = async (work: (current: () => boolean) => Promise<void>) => {
+  const run = async (work: (current: () => boolean) => Promise<void>, unknownMessage = 'Outcome unknown or response unsupported. Do not repost. Check receipt or close this session.') => {
     if (lock.current) return
     lock.current = true; setBusy(true)
     const generation = epoch.current
     const current = () => generation === epoch.current
     try { await work(current) }
-    catch { if (current()) { decision.current = null; setReview(null); setBlocked(true); setMessage('Outcome unknown or response unsupported. Do not repost. Check receipt or close this session.'); } }
+    catch { if (current()) { decision.current = null; setReview(null); setBlocked(true); setMessage(unknownMessage); } }
     finally { if (current()) { lock.current = false; setBusy(false); status.current?.focus() } }
   }
   const refused = (reason: string) => { setMessage(`Request refused: ${literal(reason)}. No automatic retry.`) }
@@ -79,6 +86,54 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
     const value = decodeNativeHumanDetailV1(JSON.stringify(projectNativeHumanDetailV1(result.value)))
     setDetail(value); setEdits({}); setReceipt(null); setLocator(null); setMessage('Choose unconsumed items and edit their exact journal text.')
   })
+  const admitSource = (input: NativeStatementInput) => run(async current => {
+    if (!session || blocked || stopped || handle) return
+    setBlocked(true); setDetail(null); setEdits({}); setPage(null); setReceipt(null); setLocator(null)
+    setMessage('Admitting text source once. Images and password are not uploaded. No processing or Post requested.')
+    const result = await session.addStatement(input)
+    if (!current()) return
+    if (!result.ok) {
+      // Unknown admission cannot safely be repeated: a capture may already exist.
+      if (['disabled', 'unavailable', 'unsupported', 'busy', 'expired', 'conflict'].includes(result.reason)) setBlocked(false)
+      setMessage(`Source admission: ${literal(result.reason)}. No automatic retry. If uncertain, close this session and inspect captures before admitting again.`)
+      return
+    }
+    const value = readNativeDetail(result.value)
+    setDetail(value); setBlocked(false)
+    setMessage('Text source admitted. Images were NOT processed. Click Process statement to start background processing; this does not Post.')
+  }, 'Outcome unknown: source admission may have succeeded. Do not upload again in this session. Close this session and inspect captures before any new admission; no automatic retry.')
+  const process = () => run(async current => {
+    if (!session || !detail || blocked || stopped || handle) return
+    setBlocked(true); setStartingProcessor(true); setEdits({})
+    setMessage('Starting bounded background processing once. No Post requested. Stop capture remains available.')
+    try {
+      const result = await session.processStatement({ id: detail.summary.id, revision: detail.summary.revision })
+      if (!current()) return
+      if (!result.ok) {
+        if (['disabled', 'unavailable', 'unsupported', 'busy', 'expired', 'conflict'].includes(result.reason)) setBlocked(false)
+        setMessage(`Processing start: ${literal(result.reason)}. No automatic retry; refresh only after a proved refusal, or Stop capture.`)
+        return
+      }
+      const value = readNativeDetail(result.value)
+      if (value.summary.id !== detail.summary.id) throw new Error('Capture mismatch')
+      setDetail(value); setBlocked(false); setMessage('Processing response received. Inspect status and draft; nothing posts automatically.')
+    } finally { if (current()) setStartingProcessor(false) }
+  }, 'Outcome unknown: processing may have started. Stop capture or close this session and inspect current status. Do not re-admit or restart automatically.')
+  const stopProcessing = async () => {
+    if (!session || !detail || stopped || handle) return
+    epoch.current++; decision.current = null; setReview(null); setBlocked(true)
+    setStartingProcessor(false); lock.current = true; setBusy(true)
+    const generation = epoch.current
+    setMessage('Capture Stop requested. This interrupts processing, not a review Cancel; posted entries are not undone.')
+    try {
+      const result = await session.stopCapture({ id: detail.summary.id, revision: detail.summary.revision })
+      if (epoch.current !== generation) return
+      setMessage(`Capture Stop: ${result.status}. Posted journal entries are not undone. No automatic retry.`)
+      if (result.status === 'closed') { setDetail(null); setEdits({}); setBlocked(false) }
+    } catch {
+      if (epoch.current === generation) setMessage('Capture Stop outcome unknown. Do not restart processing or re-admit automatically; close this session and inspect current capture status.')
+    } finally { if (epoch.current === generation) { lock.current = false; setBusy(false) } }
+  }
   const prepare = () => run(async current => {
     if (!session || !detail?.draft || blocked || handle || stopped) return
     let input: ReturnType<typeof projectNativeHumanSelectionV1>
@@ -182,6 +237,8 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
       <Button disabled={stopped} onClick={() => void stop()}>Stop session / cancel in-flight work</Button></>}
       <Button disabled={!locator || busy} onClick={() => void lookup()}>Check receipt (current authorization)</Button>
     </div>
+    {session && <NativeStatementUpload disabled={frozen || detail?.summary.phase === 'processing'} onAdmit={input => void admitSource(input)} />}
+    {pollingMessage && <p role="status">{pollingMessage}</p>}
     {!locator && !handle && <section className="space-y-3" aria-label="Recover an earlier receipt">
       <h2 className="font-semibold">Recover an earlier receipt</h2>
       <p>After reconnecting, enter the exact earlier locator. It is not authority. Recovery never prepares or confirms. These fields are not saved in browser storage.</p>
@@ -194,8 +251,12 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
     {detail && <section className="space-y-4" aria-label="Capture detail"><h2 className="text-xl font-semibold">Capture detail</h2><NativePostFields value={{ summary: detail.summary, source: detail.source, activeAttempt: detail.activeAttempt, postedIndices: detail.postedIndices, draftOutcome: detail.draft?.outcome, draftRevision: detail.draft?.revision, canonicalRevision: detail.draft?.canonicalRevision }} />
       {detail.draft?.entries.map((text, index) => <div key={index} className="border border-kumo-line rounded p-3 space-y-2"><Checkbox label={`Draft item ${index}${detail.postedIndices.includes(index) ? ' — already consumed' : ''}`} disabled={frozen || !eligible || detail.postedIndices.includes(index)} checked={Object.hasOwn(edits, index)} onCheckedChange={checked => setEdits(previous => { const next = { ...previous }; if (checked) next[index] = text; else delete next[index]; return next })} /><p className="whitespace-pre-wrap [overflow-wrap:anywhere]">Original literal: {literal(text)}</p>{Object.hasOwn(edits, index) && <label className="block">Exact edited text for item {index}<Textarea className="block w-full min-h-40 font-mono" disabled={frozen} value={edits[index]} onChange={event => setEdits({ ...edits, [index]: event.target.value })} /><span className="block [overflow-wrap:anywhere]">Edited literal: {literal(edits[index])}</span></label>}</div>)}
       <Button disabled={frozen} onClick={() => void select(detail.summary.id)}>Refresh current capture detail (discards edits)</Button>
-      {!eligible && <p>This capture is not eligible for native selection. Processing is not offered here.</p>}
-      <div className="flex flex-wrap gap-3"><Button disabled={frozen || !eligible || !Object.keys(edits).length} onClick={() => void prepare()}>Prepare selected items</Button><Button disabled={frozen} onClick={() => void run(async current => { if (!session) return; setBlocked(true); const result = await session.stopCapture({ id: detail.summary.id, revision: detail.summary.revision }); if (current()) { setMessage(`Capture Stop: ${result.status}. Posted journal entries are not undone.`); setDetail(null); if (result.status === 'closed') setBlocked(false) } })}>Stop capture (not review Cancel)</Button></div>
+      {!eligible && <p>This capture is not eligible for native selection. Processing and Post are separate actions.</p>}
+      <div className="flex flex-wrap gap-3">
+        <Button disabled={frozen || !['stored', 'failed', 'incomplete', 'interrupted', 'cancelled'].includes(detail.summary.phase)} onClick={() => void process()}>Process statement (background; no Post)</Button>
+        <Button disabled={frozen || !eligible || !Object.keys(edits).length} onClick={() => void prepare()}>Prepare selected items</Button>
+        <Button disabled={!session || stopped || !!handle || (busy && !startingProcessor)} onClick={() => void stopProcessing()}>Stop capture (not review Cancel)</Button>
+      </div>
     </section>}
     {handle && <div className="flex flex-wrap gap-3"><Button disabled={busy || !!review || stopped || !!locator} onClick={() => void openReview()}>Open complete Review</Button><Button disabled={busy || stopped} onClick={() => close(false)}>Cancel review</Button><Button disabled={busy || stopped} onClick={() => close(true)}>Dismiss prepared review</Button></div>}
     {review && <><NativePostReview response={review.response} effects={review.effects} /><div className="border-t border-kumo-line pt-4 space-y-3"><p>Original decision deadline (epoch ms): {review.response.evidence.deadline}. {now >= review.response.evidence.deadline ? 'Expired — Confirm disabled.' : 'No auto-confirm or deadline renewal.'}</p><Button disabled={busy || stopped || now >= review.response.evidence.deadline} onClick={confirm}>Confirm exact Post once</Button></div></>}
