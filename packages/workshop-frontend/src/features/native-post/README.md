@@ -24,6 +24,17 @@ two minutes, and fences late results on Stop, context replacement and unmount. C
 interrupt a pending process start; its acknowledgement, not cancellation of local rendering, determines
 whether editing may resume. Connection teardown still revokes the receiver through session `stop()`.
 
+Closing-capable reviews use independent axes review3/effect3/renderer2/receipt3. The M-generated
+codec admits only supported complete typed selections; unknown versions or selected semantics fail
+closed before Confirm. Historical V2 review/receipt grammar remains accepted unchanged. The renderer
+shows each V3 closing as a **pad + balance assertion, not a transaction**, retaining original/effective
+pad date, balance date, account, exact amount, currency, plug account and directive reference alongside
+all fourteen physical before/after inventories, assertions and plug consequences. A closing-only review
+does not invent a transaction. Selected-item receipt counts must not be described as transaction counts.
+Prepare, complete Review and one-use Confirm remain separate actions; all deployment flags remain OFF.
+
+`NativePostClosing.test.tsx` covers synthetic closing-only/mixed rendering, strict admission failures
+and the explicit panel lifecycle/receipt. It is not a writer or connected browser proof.
 `NativeStatementUpload.test.tsx` is a UI-layer synthetic-transport test, not an actual processor,
 accounting or SQLite proof. The deployment's native-post-host connected browser proof owns the real
 K/W/M composition and public-PDF browser extraction checks. Lint is deferred by user for this delivery.

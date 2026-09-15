@@ -1,7 +1,7 @@
 // UI-layer synthetic API only. No native RPC, canonical writer, accounting or human-auth proof.
 import type { RpcStub } from 'capnweb'
 import type { NativePostSession } from '@gadgets/workshop-shared/native-post-integration'
-import type { CanonicalEffectsV2, NativeHumanReviewResponseV1, NativeHumanReceiptResponseV1, NativeCaptureDetail } from '@gadgets/workshop-shared/os-native-post.generated'
+import type { CanonicalEffectsV2, NativeHumanReviewResponseV1, NativeHumanReceiptResponseV1, NativeCaptureDetail, NativeReviewViewV2 } from '@gadgets/workshop-shared/os-native-post.generated'
 import { NATIVE_POST_CONTRACT_DIGEST, NATIVE_REVIEW_SQL_COLUMNS_V2 } from '../../workshop-shared/src/os-native-post-schema.generated'
 import type { NativePostApi } from '../src/features/native-post/NativePostPanel'
 
@@ -9,7 +9,8 @@ export const rendererPin = 'd'.repeat(64)
 export const candidate = { workspaceId: 'synthetic-workspace', workpieceId: '3' }
 export const text = '2026-01-01 * "Synthetic <script>not executable</script> \\u202e"\n  Assets:Demo 1 INR\n  Equity:Demo -1 INR'
 const digest = async (domain: string, value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(['native-post-v2', domain, value])))), b => b.toString(16).padStart(2, '0')).join('')
-export const makeReview = async (editedText = text): Promise<NativeHumanReviewResponseV1> => {
+type HistoricalReview = NativeHumanReviewResponseV1 & { view: NativeReviewViewV2 }
+export const makeReview = async (editedText = text): Promise<HistoricalReview> => {
   const state = () => Object.fromEntries(Object.keys(NATIVE_REVIEW_SQL_COLUMNS_V2).map(k => [k, [] as Array<Record<string, string | number | null>>])) as CanonicalEffectsV2['before']
   const after = state()
   after.transactions.push({ id: 'generated:transaction:0', date: 20260101, flag: '*', payee: '', narration: 'Synthetic <script>not executable</script>\u202e', meta_json: '{"business":"allocation:commit-time"}', hash: 'a'.repeat(64), created_at: 'allocation:commit-time', updated_at: 'allocation:commit-time' })
@@ -33,7 +34,7 @@ export const makeReview = async (editedText = text): Promise<NativeHumanReviewRe
 
 export const syntheticApi = (mode = 'success') => {
   const counts = { confirms: 0, prepares: 0, lookups: 0, stops: 0, disposals: 0 }
-  let response: NativeHumanReviewResponseV1 | null = null
+  let response: HistoricalReview | null = null
   let receipt: NativeHumanReceiptResponseV1 | null = null
   const detail: NativeCaptureDetail = { activeAttempt: null, draft: { canonicalRevision: '0'.repeat(16), entries: [text, text], outcome: 'complete', revision: 1 }, postedIndices: [], source: { complete: true, filename: 'Synthetic only.txt', pageCount: 1, pages: [{ page: 1, text }] }, summary: { draftRevision: 1, epoch: 1, evidence: 'complete_text_pages', id: 'synthetic-capture', pages: 1, phase: 'needs_review', post: 'blocked_atomic_post_and_human_gate', processing: 'blocked_processor_and_human_gate', revision: 1, sequence: 1, sourceRevision: 1, updatedAt: 0 } }
   const methods = {
@@ -42,7 +43,7 @@ export const syntheticApi = (mode = 'success') => {
     prepareSelection: async (input: Parameters<NativePostSession['prepareSelection']>[0]) => { counts.prepares++; response = await makeReview(input.selection[0].editedText); return { ok: true as const, value: { reviewId: response.view.binding.reviewId, generation: '1' } } },
     reviewPrepared: async () => {
       if (!response) throw Error('No preparation')
-      const value = structuredClone(response)
+      const value: NativeHumanReviewResponseV1 = structuredClone(response)
       if (mode === 'malformed') value.view.effectJSON = '{}'
       if (mode === 'expired') value.evidence.deadline = value.evidence.issuedAt
       return { ok: true as const, value: { token: 'synthetic-token', response: value } }

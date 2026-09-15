@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import type { CanonicalEffectsV2, NativeHumanReviewResponseV1 } from '@gadgets/workshop-shared/os-native-post.generated'
+import type { CanonicalEffectsV2, CanonicalEffectsV3, NativeHumanReviewResponseV1 } from '@gadgets/workshop-shared/os-native-post.generated'
 
 /** Literal presentation: quotes distinguish business strings from structural labels.
  * Escape controls, bidi formatting and non-ASCII code units (including lone surrogates). */
@@ -16,8 +16,19 @@ export const NativePostFields = ({ value }: { value: unknown }): ReactNode => {
   return <dl className="space-y-2">{Object.entries(value).map(([key, item]) => <div key={key} className="min-w-0"><dt className="font-semibold [overflow-wrap:anywhere]">{literal(key)}</dt><dd className="ml-3 min-w-0"><NativePostFields value={item} /></dd></div>)}</dl>
 }
 
-const sections: { key: keyof CanonicalEffectsV2; title: string; note: string }[] = [
-  { key: 'selected', title: 'Effective selected entries', note: 'Original and normalized effective journal entries; selected-append or selected-claim reason. Edited text is not necessarily the final journal.' },
+type Effects = CanonicalEffectsV2 | CanonicalEffectsV3
+
+const SelectedItems = ({ effects }: { effects: Effects }) => <section className="border-t border-kumo-line pt-4">
+  <h3 className="text-lg font-semibold">Effective selected entries</h3>
+  <p>Original and normalized effective entries follow in full. Edited text is not necessarily the final journal.</p>
+  {effects.effectVersion === 2 ? <NativePostFields value={effects.selected} /> : <ol className="space-y-3 pl-4">{effects.selected.map(item => <li key={item.draftIndex} className="border-l border-kumo-line pl-3 space-y-2">
+    <h4 className="font-semibold">Draft item {item.draftIndex} — {item.kind === 'closing' ? 'Closing pad + balance assertion (not a transaction)' : 'Transaction'}</h4>
+    {item.kind === 'closing' && <p>The original and effective pad date, balance date, account, exact amount, currency and plug account are shown below. The directive reference links to the complete physical inventories and plug consequences; no transaction is invented for this closing item.</p>}
+    <NativePostFields value={item} />
+  </li>)}</ol>}
+</section>
+
+const sections: { key: Exclude<keyof Effects, 'selected'>; title: string; note: string }[] = [
   { key: 'commands', title: 'Ordered actions', note: 'Execution order is preserved, including unmatched deletes and adjacent delete/reinsert actions.' },
   { key: 'carried', title: 'Carried changes and reasons', note: 'Replacement identity (replaces / nextRef) is distinct from an in-place update. Complete before and after children follow.' },
   { key: 'rewards', title: 'Reward consequences', note: 'private-trusted-fixture-not-Graph: not Graph-complete. Includes unchanged coverage and duplicate multiplicity.' },
@@ -34,11 +45,12 @@ const sections: { key: keyof CanonicalEffectsV2; title: string; note: string }[]
   { key: 'unsupported', title: 'Unsupported effects', note: '' },
 ]
 
-export const NativePostReview = ({ response, effects }: { response: NativeHumanReviewResponseV1; effects: CanonicalEffectsV2 }) => <article aria-label="Complete Post review" className="space-y-6 min-w-0">
+export const NativePostReview = ({ response, effects }: { response: NativeHumanReviewResponseV1; effects: Effects }) => <article aria-label="Complete Post review" className="space-y-6 min-w-0">
   <h2 className="text-xl font-semibold">Review exact Post consequences</h2>
   <p>All strings below are lossless JSON-escaped literals (Unicode shown as \\uXXXX). No business text is an instruction or approval control. Read the complete document before Confirm.</p>
   <section><h3 className="text-lg font-semibold">Identity, scope, versions and original deadlines</h3><NativePostFields value={{ humanVersion: response.humanVersion, evidence: response.evidence, binding: response.view.binding }} /></section>
   <section><h3 className="text-lg font-semibold">Selected draft items ({response.view.selection.length})</h3><NativePostFields value={response.view.selection} /></section>
   <section><h3 className="text-lg font-semibold">Unconsumed remainder ({response.view.remainder.length})</h3><NativePostFields value={response.view.remainder} /></section>
+  <SelectedItems effects={effects} />
   {sections.map(({ key, title, note }) => <section key={key} className="border-t border-kumo-line pt-4"><h3 className="text-lg font-semibold">{title}</h3>{note && <p className="text-kumo-subtle mb-3">{note}</p>}<NativePostFields value={effects[key]} /></section>)}
 </article>

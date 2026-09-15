@@ -85,7 +85,7 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
     if (!current()) return
     if (!result.ok) return refused(result.reason)
     const value = decodeNativeHumanDetailV1(JSON.stringify(projectNativeHumanDetailV1(result.value)))
-    setDetail(value); setEdits({}); setReceipt(null); setLocator(null); setMessage('Choose unconsumed items and edit their exact journal text.')
+    setDetail(value); setEdits({}); setReceipt(null); setLocator(null); setMessage('Choose unconsumed items and edit their exact journal text. A closing item is a pad + balance assertion, not a transaction. Prepare validates each selected item; nothing posts automatically.')
   })
   const admitSource = (input: NativeStatementInput) => run(async current => {
     if (!session || blocked || stopped || handle) return
@@ -261,6 +261,6 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
     </section>}
     {handle && <div className="flex flex-wrap gap-3"><Button disabled={busy || !!review || stopped || !!locator} onClick={() => void openReview()}>Open complete Review</Button><Button disabled={busy || stopped} onClick={() => close(false)}>Cancel review</Button><Button disabled={busy || stopped} onClick={() => close(true)}>Dismiss prepared review</Button></div>}
     {review && <><NativePostReview response={review.response} effects={review.effects} /><div className="border-t border-kumo-line pt-4 space-y-3"><p>Original decision deadline (epoch ms): {review.response.evidence.deadline}. {now >= review.response.evidence.deadline ? 'Expired — Confirm disabled.' : 'No auto-confirm or deadline renewal.'}</p><Button disabled={busy || stopped || now >= review.response.evidence.deadline} onClick={confirm}>Confirm exact Post once</Button></div></>}
-    {receipt && <section aria-label="Post receipt"><h2 className="text-xl font-semibold">Post receipt and remainder</h2><p>Canonical legacy counts and consequence counts are separate. Availability describes current historical receipt availability.</p><NativePostFields value={receipt} /></section>}
+    {receipt && <section aria-label="Post receipt"><h2 className="text-xl font-semibold">Post receipt and remainder</h2><p>Selected item counts include closing assertions when present; transaction counts do not. Canonical legacy counts and consequence counts are separate. Availability describes current historical receipt availability.</p><NativePostFields value={receipt} /></section>}
   </div>
 }
