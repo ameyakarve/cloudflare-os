@@ -46,10 +46,12 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
   const epoch = useRef(0)
   const lock = useRef(false)
   const decision = useRef<string | null>(null)
+  const recovery = useRef<RpcStub<NativePostSession> | null>(null)
+  const recoveryAttempted = useRef(false)
   const status = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 250)
-    return () => { clearInterval(timer); epoch.current++; decision.current = null }
+    return () => { clearInterval(timer); epoch.current++; decision.current = null; recovery.current?.[Symbol.dispose](); recovery.current = null }
   }, [])
 
   const run = async (work: (current: () => boolean) => Promise<void>) => {
@@ -153,16 +155,22 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
   }
   const lookup = () => run(async current => {
     if (!locator) return
-    // Recovery uses a newly acquired current-authorized session, never the consumed decision.
-    const fresh = await api.openNativePost(candidate)
-    if (!fresh) { if (current()) refused('unavailable'); return }
-    try {
-      if (!current()) return
-      const result = await fresh.lookupPost(locator)
-      if (!current()) return
-      if (!result.ok) { setMessage('Receipt unknown/unavailable. This is not proof of non-commit. Do not repost.'); return }
-      acceptReceipt(result.value)
-    } finally { fresh[Symbol.dispose]() }
+    // lookupPost rechecks current authority itself, even after Stop. Never reopen
+    // a root already consumed by Connection. OFF recovery lazily owns one stub,
+    // retained for lookup only; it never becomes the panel's Post session.
+    let lookupSession = session ?? recovery.current
+    if (!lookupSession && !recoveryAttempted.current) {
+      recoveryAttempted.current = true
+      const acquired = await api.openNativePost(candidate)
+      if (!current()) { acquired?.[Symbol.dispose](); return }
+      recovery.current = acquired
+      lookupSession = acquired
+    }
+    if (!lookupSession) { refused('unavailable'); return }
+    const result = await lookupSession.lookupPost(locator)
+    if (!current()) return
+    if (!result.ok) { setMessage('Receipt unknown/unavailable. This is not proof of non-commit. Do not repost.'); return }
+    acceptReceipt(result.value)
   })
   const eligible = detail?.draft && ['complete', 'needs_review'].includes(detail.draft.outcome) &&
     ['needs_review', 'partially_posted'].includes(detail.summary.phase)
