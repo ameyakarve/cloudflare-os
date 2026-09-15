@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Input } from '@cloudflare/kumo'
 import { available, extractNativeStatement } from 'virtual:native-statement-reader'
 import { nativeStatementSource, type NativeStatementInput } from './nativeStatementSource'
+import { literal } from './NativePostReview'
 
 export const NativeStatementUpload = ({ disabled, onAdmit }: {
   disabled: boolean; onAdmit: (input: NativeStatementInput) => void
@@ -43,12 +44,13 @@ export const NativeStatementUpload = ({ disabled, onAdmit }: {
     }
   }
   if (!available) return <section aria-label="Upload native statement"><h2 className="text-xl font-semibold">Upload PDF statement</h2><p>Deployment PDF reader unavailable. No upload is offered.</p></section>
-  return <section aria-label="Upload native statement" className="border border-kumo-line rounded p-4 space-y-3">
+  return <section aria-label="Upload native statement" className="min-w-0 border border-kumo-line rounded p-4 space-y-3">
     <h2 className="text-xl font-semibold">Upload PDF statement</h2>
     <p>Text-layer-only mode: images are NOT processed and OCR is unsupported. Text must exist on EVERY page. Image content may contain transactions missing from the text layer; this mode is not equivalent to processing the full PDF. Maximum 15 MB, 15 pages and 131072 UTF-8 text bytes; no page truncation.</p>
     <Checkbox label="I explicitly choose text-layer-only processing; images are NOT processed and OCR is unsupported" checked={optedIn} disabled={disabled || !available} onCheckedChange={value => { cancel(); setOptedIn(value === true) }} />
-    <label className="block">PDF file<Input type="file" accept="application/pdf,.pdf" disabled={disabled || !available} onChange={event => { cancel(); setFile(event.target.files?.[0] ?? null); setMessage('File selected locally. Click Read PDF locally; no source has been uploaded.') }} /></label>
-    <label className="block">PDF password (local only)<Input type="password" autoComplete="off" value={password} disabled={disabled || reading || !available} onChange={event => setPassword(event.target.value)} /></label>
+    <label className="block min-w-0">PDF file<Input className="block w-full min-w-0 max-w-full" type="file" accept="application/pdf,.pdf" disabled={disabled || !available} onChange={event => { cancel(); setFile(event.target.files?.[0] ?? null); setMessage('File selected locally. Click Read PDF locally; no source has been uploaded.') }} /></label>
+    {file && <p className="[overflow-wrap:anywhere]">Selected PDF filename: {literal(file.name)}</p>}
+    <label className="block min-w-0">PDF password (local only)<Input className="block w-full min-w-0 max-w-full" type="password" autoComplete="off" value={password} disabled={disabled || reading || !available} onChange={event => setPassword(event.target.value)} /></label>
     <div className="flex flex-wrap gap-3">
       <Button disabled={disabled || !available || !file || !optedIn || reading} onClick={() => void read()}>Read PDF locally</Button>
       <Button disabled={!reading && !source && !password} onClick={() => { cancel(); setMessage('Local reading cancelled. No source was admitted by this action.') }}>Cancel local reading</Button>
