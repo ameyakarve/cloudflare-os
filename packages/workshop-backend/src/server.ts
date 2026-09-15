@@ -2,7 +2,7 @@ import { newWorkersRpcResponse } from "./rpc-session.js";
 import {NativePostRootLifetime, acquireNativePostContext, nativePostEnvelope} from './native-post-human.js';
 import type {NativePostOwnerCandidate} from '@gadgets/workshop-shared/deployment-native-post';
 import type {NativePostSession} from '@gadgets/workshop-shared/native-post-integration';
-import {NATIVE_POST_CONTRACT_DIGEST} from '../../workshop-shared/src/os-native-post-schema.generated.js';
+import {NATIVE_POST_CONTRACT_DIGEST, NATIVE_HUMAN_VERSIONS_CURRENT} from '../../workshop-shared/src/os-native-post-schema.generated.js';
 import { deploymentAccessEnabled, DeploymentAccessError, readDeploymentAccess, watchDeploymentAccess } from "./deployment-access.js";
 import { RpcStub, RpcTarget } from "capnweb";
 import { validateRpc, skipRpcValidation } from "capnweb-validate";
@@ -133,8 +133,10 @@ class AuthenticatedApiImpl extends RpcTarget implements AuthenticatedApi {
       const guard = await this[acquireNativePostContext](args[0], this.env.NATIVE_POST_HUMAN_V2 !== 'true');
       using root = new NativeRpcStub(guard);
       const context = await guard[nativePostEnvelope](this.#installSession, String(this.#installGeneration), contract, renderer);
-      const session = await factory.openNativePost(context, {contextId: crypto.randomUUID(), humanVersion: 1,
-        reviewVersion: 2, effectVersion: 2, rendererVersion: 1, contractDigest: contract, rendererArtifactDigest: renderer}, root);
+      const versions = NATIVE_HUMAN_VERSIONS_CURRENT;
+      const session = await factory.openNativePost(context, {contextId: crypto.randomUUID(), humanVersion: versions.human,
+        reviewVersion: versions.review, effectVersion: versions.effect, rendererVersion: versions.renderer,
+        contractDigest: contract, rendererArtifactDigest: renderer}, root);
       if (!session) return null;
       try {
         await root.checkCurrent();
