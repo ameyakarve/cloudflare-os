@@ -53,7 +53,7 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
   const recovery = useRef<RpcStub<NativePostSession> | null>(null)
   const recoveryAttempted = useRef(false)
   const status = useRef<HTMLDivElement>(null)
-  const pollingMessage = useNativeStatementPoll(session, detail, busy || blocked || stopped || !!handle, value => {
+  const pollingMessage = useNativeStatementPoll(session, detail, busy || blocked || stopped || !!handle, epoch, value => {
     if (!lock.current) { setDetail(value); setEdits({}) }
   })
   useEffect(() => {
@@ -64,7 +64,8 @@ const NativePostPanelSession = ({ session, api, candidate, rendererPin }: PanelP
   const run = async (work: (current: () => boolean) => Promise<void>, unknownMessage = 'Outcome unknown or response unsupported. Do not repost. Check receipt or close this session.') => {
     if (lock.current) return
     lock.current = true; setBusy(true)
-    const generation = epoch.current
+    // Fence background reads immediately, before React's passive-effect cleanup.
+    const generation = ++epoch.current
     const current = () => generation === epoch.current
     try { await work(current) }
     catch { if (current()) { decision.current = null; setReview(null); setBlocked(true); setMessage(unknownMessage); } }

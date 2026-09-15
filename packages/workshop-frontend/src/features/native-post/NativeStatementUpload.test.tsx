@@ -146,6 +146,18 @@ describe('connected native processing and existing Post controls', () => {
     await act(async () => finish({ ok: true, value: f.original })); await tick(10000)
     expect(container.textContent).not.toContain('Draft item 0'); expect(f.get).toHaveBeenCalledTimes(1)
   })
+  it('fences a poll synchronously at Stop, before passive effect cleanup', async () => {
+    const f = await panel()
+    let finish!: (value: { ok: true; value: NativeCaptureDetail }) => void
+    f.get.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    await click('Process statement'); await tick()
+    await act(async () => {
+      [...container.querySelectorAll('button')].find(b => b.textContent?.includes('Stop session'))!.click()
+      finish({ ok: true, value: f.original })
+      await Promise.resolve()
+    })
+    expect(container.textContent).not.toContain('Draft item 0')
+  })
   it('a failed poll stops read retries and leaves explicit Stop available', async () => {
     const f = await panel(); f.get.mockRejectedValue(Error('unavailable'))
     await click('Process statement'); await tick(10000)
