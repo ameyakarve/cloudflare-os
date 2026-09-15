@@ -1,10 +1,10 @@
 /** GENERATED ONLY by M/scripts/generate-os-native-post-contract.mjs. No authority.
- * Contract sha256:4aef36d8ea067ff1d20b5cf88b1d0e2ea1391776de8516044e788865820dc5b4
+ * Contract sha256:d5e6d6fa998d5879c471bcda5dfc775858b3af99eb8ef6d54c517a60425a2a02
  * package.json sha256:7d4b33ede9d32c6ff790269242b0feb9b542b78ecaffaabb7c58ca2e5594ae96
  * pnpm-lock.yaml sha256:259507bf9e5bc30fb2d70edbd90c021eab2f1981c786c6fc8b2d4a6f6150177d
- * scripts/generate-os-native-post-contract.mjs sha256:af64c1b0a4632472c169f8a6fc7c0f22913ba615c4b99f19aed0b043ab67e822
+ * scripts/generate-os-native-post-contract.mjs sha256:fa014f1c70e2d76b1fdcb8979f865c97b8501f802be1103f5a78d9340637199f
  * scripts/inject-do.mjs sha256:4bfb6dfece71dc914fe1cea9ffa28e742c39b782b159eb63563e1ff763e169d5
- * scripts/os-native-post-source-closure.json sha256:0a5f9e348772ebddab7d9c1fc773836f816b3b5796556b27eb53c0fcd1300254
+ * scripts/os-native-post-source-closure.json sha256:e33680b0ab67fee541c8f25cd5b1313319316422d3eea00281952fc86aa19c5e
  * src/durable/agent-prompt/index.ts sha256:6dd262e1b4a2823cff6bafb7ed95d0fb95199e3111f9e8f17951a817e0777eee
  * src/durable/agent-prompt/inline.generated.ts sha256:5234735a527a19f13184714b77f5e639bc77a8cecf8b3c0c49eeae5d43cee84b
  * src/durable/agent-ui-schemas.ts sha256:bc58c7195b8f67a8d2e12e752fed77295c3349d742399e6fda7639a02886a52c
@@ -27,9 +27,10 @@
  * src/durable/base-agent-do.ts sha256:af28b64ec36faf022828f402ce290ce4d472c9d625f8119653fec89d2f3dd981
  * src/durable/canonical-allocation-admission.ts sha256:1fb9e295f4647456439d88783cb1387bed37db4ee6a0f1f213641db3d7405752
  * src/durable/canonical-directive-rows.ts sha256:b668533b135a11fe469e27d74be970b4995a7d18b822e3203e1809e26a184219
- * src/durable/canonical-effects-v2.ts sha256:e35dc648376bd5b9185a0e64f7d85d3f7c3d316e3e9e378d14c38c9a445329f5
+ * src/durable/canonical-effects-v2.ts sha256:b9276dacd5444fc84e19ab657885e0df37ed9ef9ba2f8490fe13015d4b8c12fb
+ * src/durable/canonical-effects-v3.ts sha256:f60b1f7f1c18aa3e62f5d3e0ad7eeef092f073b5701a42ee0058a43bee97986f
  * src/durable/canonical-journal-derived-state.ts sha256:f8df3c92c812def962ca13b6bccf95bf91756bed5dca8881e2ffb9b0d845b9c6
- * src/durable/canonical-journal-mutation.ts sha256:c8fa87591024dce1c8620539ad821cc6e7ef660efba3a0acad32d4956717c335
+ * src/durable/canonical-journal-mutation.ts sha256:a0e55e269635d186697f8574bc64d4a011b118044bd507b0d7f61fadba4485f9
  * src/durable/canonical-prospective-derived-adapter.ts sha256:fb96cd171d38eb723e479a86ea4fe7188b44762861b90ebb0fdf898c42432c71
  * src/durable/canonical-reward-open-rows.ts sha256:2d386e692443f246a7c48ed6bbfc35ee45ee30ba7ed9b61562617cfc1f9596e9
  * src/durable/canonical-transaction-rows.ts sha256:f3838971ad9d53ef187c3f4476b9dc7c47df417da9cbbbf6db28a75f6240ca0e
@@ -47,13 +48,15 @@
  * src/durable/ledger-do.ts sha256:7315a01324aab89f349ded12323bcd0d036e802984fe86a1bb6865210e4c4fb4
  * src/durable/ledger-types.ts sha256:1aca581753d23599835597a3500f1d4bdb2e0a9e44331870dda0fdfa5d22d1ba
  * src/durable/native-canonical-admission.ts sha256:21a78f7c54454face59977e89e3f2a5ec2f8c22ea7e01048ae2643b6ae4f80c8
- * src/durable/native-capture-post-v2.ts sha256:e6b652d1c024fb350df88b164a28ba7e41f044b7fde13e955c04eb7214cadd11
+ * src/durable/native-capture-post-v2.ts sha256:97fb5f42ee22b85d8ca3051b3b844cebf16e7a169ff342694708cfc84f507682
  * src/durable/native-capture-post.ts sha256:a3fc36682ada4dd12a0b2e3905d34d1aaba26f5fa88bf52788f338c9d3023027
- * src/durable/native-capture-store.ts sha256:e835edd8a908cb5e38bd5231b2d39efa3115d1c98ccff75fe293424d741b584d
- * src/durable/native-post-human-installation-v1.ts sha256:b3ab93242e0725c6ca89a82ae602fcf07d924e57d931542e168886e6de8cc452
- * src/durable/native-post-human-session-v2.ts sha256:09a59525cd177f52499fa40c44aa959d5339eb709fee4d7774f494f8c845d7b5
+ * src/durable/native-capture-store.ts sha256:712ceeddccc38617087de290050230fe8e2e38130d1a3dc4050a301de3d3c4b7
+ * src/durable/native-post-human-installation-v1.ts sha256:d67e834f5a52b8d1c25ae96fb46dbe56c2ddee149bf6afe1645b19512602b473
+ * src/durable/native-post-human-session-v2.ts sha256:25f6eb1aaf2b1aedf536c1fb7a82d70c300284b5640a947a035e4bc02dee6ab2
  * src/durable/native-post-input-admission.ts sha256:55b5ad1c3619d6878d85ed43f690544dbf3526167b33566762102afcbfb04317
  * src/durable/native-review-v2.ts sha256:ceac62fca6ab01552f92a28fb4cb3ea923e1b3e9b67a4a36adf71a8bab4b3017
+ * src/durable/native-review-v3.ts sha256:be48879df5e0fa212da6f2a43d6d7400ad368d17ac22bf44f939d28806491644
+ * src/durable/native-selected-item-v3.ts sha256:dd7d86e742771ad0ce2503f62a524e8fbee0c35904e2acfd5d98c97b68fd71cc
  * src/durable/native-statement-processor.ts sha256:cb2945ff3d789d816766ef1709b25b4467087f2ea6ac9a6c642a11b2a6396255
  * src/durable/native-statement-runtime.ts sha256:708560cf9dcf7078273657ebd800b1854e113f7e46a375d1b619599df47a9de7
  * src/durable/os-budget-store.ts sha256:f3e1d34a604bc055a1a893f4889612f6bbe5d1b7f26b804ed9bbc3637571f8dc
@@ -87,7 +90,8 @@
  * src/lib/ledger-core/rename-scope.ts sha256:c478c02bb14b27ef485c046aeb22fad4e26a9bcedabb8654bec46e8b622db36e
  * src/lib/ledger-core/schema.ts sha256:f2105927e82fe2ae387ed87d00f84974c0f12b2981c6bd9438d0df584fd2e46c
  * src/lib/native-review-schema-v2.shape.json sha256:231b9890cf9776682e0fec91c6d2bb7297ef0d53b910e8c8520dc84943e52a55
- * src/lib/native-review-schema-v2.ts sha256:d984b01f76904ee4632006135bc30898ea9dc78e2166a3e9f271500138d0cb12
+ * src/lib/native-review-schema-v2.ts sha256:195d1cd57e51ed2550d90f8c3baf1aef97d02cd568bda5a3c9271617de07bab2
+ * src/lib/native-review-schema-v3.shape.json sha256:639e87bc0bd42b88650c0d1f2bfb661892904e93fd6e7dbf31ab584150ec0283
  * src/lib/os-budget.ts sha256:5da8246a177b5d7987dc0859fcf76d5eea1855fd676c3acfcdc8a242a4bf7245
  * src/lib/os-doctor-contract.ts sha256:92cf9fa36fc7d4c15d0dc5463d7f51ebb1fe9cbd4ff369603175ac47a62fb017
  * src/lib/os-doctor-control-contract.ts sha256:685be5a10e5274eeb5e25bb58fe77119b9e568e274714d5ee622ee6b32843632
@@ -96,9 +100,9 @@
  * src/lib/os-doctor-scope.ts sha256:edebec8c098b4ce1c742b6bc2ac3459fc209cb717033bc737f9ead85064557ad
  * src/lib/os-doctor-source.ts sha256:ec7c0ecbfc97b8a2348effeb16251586fff9e0526ab0824b7a2e0babddc0d41e
  * src/lib/os-editor-budget.ts sha256:c8de6fe6a76b22cf4c9a273c60f43fe4fa1e6dbef10e74240e392891a911eca1
- * src/lib/os-native-capture-contract.ts sha256:91920b00364248111e0d751dc168c65450e40e2f3c55a79e152bff5a0de9020e
+ * src/lib/os-native-capture-contract.ts sha256:7d666563f2edd363e5dbe4b5acff93d7d88e77dab88d0404ce3a43b866c6fb85
  * src/lib/os-native-capture-sql.ts sha256:c625dcda1a28ff87acae1af520d9907b9d892571a02945d4b154baee70f15d64
- * src/lib/os-native-post-human-contract.ts sha256:ad912298ef82e7a61bc9d72ac0bd5aa18ca40ec32a691f2177690fe25ad34c0a
+ * src/lib/os-native-post-human-contract.ts sha256:a5e9b508c43bfb494148e054e1cd113ba97a74c8edb6850f1f54311a165bbede
  * src/lib/os-usage-acquisition-v2.ts sha256:0936db31f061540181703073cca49dd7f6bcd80084200456d5816b897147fb7e
  * src/lib/os-vault-contract.ts sha256:30b0c41edbfd4ab83fb5f9f7e409f47de68b3e1e2c13e17180ab54fc48b97e62
  * src/lib/os-vault-projection.ts sha256:2023748d4dae7357e28c38682ec0d949ea25fdb84930c18e8b0b7e859197b23a
