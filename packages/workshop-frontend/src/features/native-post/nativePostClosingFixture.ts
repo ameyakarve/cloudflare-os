@@ -4,7 +4,7 @@ import { makeReview } from '../../../native-post-harness/fixture'
 
 export const closingText = '2026-01-30 pad Assets:Closing Equity:Closing\n2026-01-31 balance Assets:Closing 12.34 INR'
 const digest = async (domain: string, value: string) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(['native-post-v2', domain, value])))), b => b.toString(16).padStart(2, '0')).join('')
-const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b, 'en')).map(([k, x]) => [k, sorted(x)])) : v
+const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).toSorted(([a], [b]) => a.localeCompare(b, 'en')).map(([k, x]) => [k, sorted(x)])) : v
 
 export const makeClosingReview = async (mixed = false): Promise<NativeHumanReviewResponseV1 & { view: NativeReviewViewV3 }> => {
   const historical = await makeReview()

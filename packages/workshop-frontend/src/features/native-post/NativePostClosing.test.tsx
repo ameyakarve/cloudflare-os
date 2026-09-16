@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 // @ts-expect-error Node test runtime; frontend excludes Node types.
@@ -12,6 +12,7 @@ import { admitReview } from './nativePostAdmission'
 import { closingText, makeClosingReview } from './nativePostClosingFixture'
 import { candidate, rendererPin, syntheticApi } from '../../../native-post-harness/fixture'
 
+const { act } = React
 vi.stubGlobal('crypto', webcrypto)
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 let root: Root, container: HTMLDivElement
@@ -19,7 +20,7 @@ beforeEach(() => { container = document.createElement('div'); document.body.appe
 afterEach(() => { act(() => root.unmount()); container.remove() })
 const click = async (label: string) => {
   const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes(label))!
-  expect(button, label).toBeTruthy(); expect(button.disabled, label).toBe(false)
+  expect(button).toBeTruthy(); expect(button.disabled).toBe(false)
   await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 40)) })
 }
 
@@ -31,16 +32,16 @@ describe('closing-capable current review (synthetic wire/UI proof only)', () => 
     for (const value of ['2026-01-30', '2026-01-31', 'Assets:Closing', 'Equity:Closing', '12.34', 'INR', 'selected-closing', 'padDate', 'plug_account', 'amount_scaled']) expect(node.textContent).toContain(literal(value))
     for (const table of Object.keys(NATIVE_REVIEW_SQL_COLUMNS_V2)) expect(node.textContent).toContain(literal(table))
     // Entire admitted tree, not a summary/truncated or synthesized transaction.
-    const check = (value: unknown): void => {
-      if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) { if (!Array.isArray(value)) expect(node.textContent).toContain(literal(key)); check(child) }
-      else expect(node.textContent).toContain(literal(value))
+    const literals = (value: unknown): string[] => {
+      if (value && typeof value === 'object') return Object.entries(value).flatMap(([key, child]) => [...(Array.isArray(value) ? [] : [literal(key)]), ...literals(child)])
+      return [literal(value)]
     }
     expect(node.textContent).toContain('Full before inventory — all 14 tables')
     expect(node.textContent).toContain('Full after inventory — all 14 tables')
-    Object.values(admitted.effects).forEach(check)
+    for (const value of Object.values(admitted.effects).flatMap(literals)) expect(node.textContent).toContain(value)
     expect(node.querySelector('details,iframe,script')).toBeNull()
     expect(admitted.effects.after.transactions).toHaveLength(mixed ? 1 : 0)
-    if (!mixed) expect(node.textContent).not.toContain('insertTransaction')
+    expect(node.textContent?.includes('insertTransaction')).toBe(mixed)
   })
   it.each(['review', 'effect', 'renderer', 'selected-field', 'missing-closing', 'duplicate-closing', 'pad-date', 'physical-balance'])('%s refuses before Confirm', async change => {
     const r = await makeClosingReview(true)
@@ -54,7 +55,7 @@ describe('closing-capable current review (synthetic wire/UI proof only)', () => 
     if (change === 'pad-date') effects.selected[1].effective.padDate = '2026-01-29'
     if (change === 'physical-balance') effects.after.directives_balance[0].amount = '999.00'
     r.view.effectJSON = JSON.stringify(effects)
-    await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow()
+    await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow('Native review unavailable: unsupported or over limit')
   })
   it('requires explicit Prepare, complete Review, Confirm once and renders receipt V3 without counting closing as a transaction', async () => {
     const f = syntheticApi(), response = await makeClosingReview()

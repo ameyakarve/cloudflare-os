@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 // @ts-expect-error Node test runtime; the frontend program intentionally excludes Node types.
@@ -12,6 +12,7 @@ import { admitReview, nativePostEnabled } from './nativePostAdmission'
 import { candidate, makeReview, rendererPin, syntheticApi } from '../../../native-post-harness/fixture'
 import { NATIVE_REVIEW_SQL_COLUMNS_V2 } from '@gadgets/workshop-shared/os-native-post-schema.generated'
 
+const { act } = React
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 vi.stubGlobal('crypto', webcrypto)
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) }) }
@@ -21,7 +22,7 @@ beforeEach(() => { container = document.createElement('div'); document.body.appe
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllEnvs() })
 const click = async (label: string) => {
   const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes(label))
-  expect(button, label).toBeTruthy(); expect(button!.disabled, label).toBe(false)
+  expect(button).toBeTruthy(); expect(button!.disabled).toBe(false)
   await act(async () => button!.click()); await flush()
 }
 const mount = async (mode = 'success') => {
@@ -114,14 +115,14 @@ describe('renderer/admission refusal and lossless coverage', () => {
   })
   it('verifies full binding/effect/view digests and candidate, not response-selected pins', async () => {
     const r = await makeReview(); expect((await admitReview(r, rendererPin, candidate)).response.view.binding).toEqual(r.view.binding)
-    await expect(admitReview(r, 'e'.repeat(64), candidate)).rejects.toThrow()
-    await expect(admitReview(r, rendererPin, { ...candidate, workpieceId: 'foreign' })).rejects.toThrow()
-    r.view.selection[0].editedText += 'tamper'; await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow()
+    await expect(admitReview(r, 'e'.repeat(64), candidate)).rejects.toThrow('Unsupported or expired review')
+    await expect(admitReview(r, rendererPin, { ...candidate, workpieceId: 'foreign' })).rejects.toThrow('Unsupported or expired review')
+    r.view.selection[0].editedText += 'tamper'; await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow('Native review unavailable: unsupported or over limit')
   })
   it('unknown nested semantic fields and oversized views refuse before rendering', async () => {
     const r = await makeReview(); const e = JSON.parse(r.view.effectJSON); e.selected[0].futureAuthority = true
-    r.view.effectJSON = JSON.stringify(e); await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow()
-    r.view.effectJSON = ' '.repeat(524289); await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow()
+    r.view.effectJSON = JSON.stringify(e); await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow('Native review unavailable: unsupported or over limit')
+    r.view.effectJSON = ' '.repeat(524289); await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow('Native review unavailable: unsupported or over limit')
   })
   it('all schema table columns, business metadata and reason strings are literal, complete and uncollapsed', async () => {
     const admitted = await admitReview(await makeReview(), rendererPin, candidate)
@@ -132,7 +133,10 @@ describe('renderer/admission refusal and lossless coverage', () => {
     const reasons = ['selected-append', 'selected-claim', 'claim-rewrite', 'claim-open-deduplication', 'reward-overlap', 'reward-open-missing', 'reward-currency-widening', 'already-covered']
     const value = { inventory, reasons, meta: 'generated:* allocation:commit-time <script>x</script>\u202e\u0000\ud800', amount: '123456789123456789', hash: 'abcdef'.repeat(11) }
     node.innerHTML = renderToStaticMarkup(<NativePostFields value={value} />)
-    const check = (v: unknown): void => { if (v && typeof v === 'object') { for (const [k, x] of Object.entries(v)) { if (!Array.isArray(v)) expect(node.textContent).toContain(literal(k)); check(x) } } else expect(node.textContent).toContain(literal(v)) }
-    check(value); expect(node.querySelector('script,details,iframe')).toBeNull()
+    const literals = (v: unknown): string[] => v && typeof v === 'object'
+      ? Object.entries(v).flatMap(([k, x]) => [...(Array.isArray(v) ? [] : [literal(k)]), ...literals(x)])
+      : [literal(v)]
+    for (const text of literals(value)) expect(node.textContent).toContain(text)
+    expect(node.querySelector('script,details,iframe')).toBeNull()
   })
 })

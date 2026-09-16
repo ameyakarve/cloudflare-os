@@ -28,7 +28,7 @@ export const makeReview = async (editedText = text): Promise<HistoricalReview> =
   binding.selectionHash = await digest('selection', JSON.stringify([selection, remainder]))
   binding.planHash = await digest('effect', effectJSON)
   const view = { binding: { ...binding, bindingHash: await digest('binding', JSON.stringify(binding)) }, selection, remainder, effectJSON }
-  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b, 'en')).map(([k, x]) => [k, sorted(x)])) : v
+  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).toSorted(([a], [b]) => a.localeCompare(b, 'en')).map(([k, x]) => [k, sorted(x)])) : v
   return { humanVersion: 1, view, evidence: { humanVersion: 1, principal: 'synthetic-owner', userId: 'synthetic-user', userIncarnation: '1', ...candidate, resourceId: 'synthetic-resource', resourceGeneration: '1', rootSessionId: 'synthetic-root', rootGeneration: '1', uiSessionGeneration: '1', receiverId: 'synthetic-receiver', receiverSessionId: 'synthetic-session', binding: { ...view.binding }, viewDigest: await digest('human-complete-view-v1', JSON.stringify(sorted(view))), contractDigest: NATIVE_POST_CONTRACT_DIGEST, rendererArtifactDigest: rendererPin, rendererVersion: 1, decisionId: 'synthetic-decision', issuedAt: now, deadline: now + 60000 } }
 }
 

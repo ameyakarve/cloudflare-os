@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 // @ts-expect-error Node test runtime; the frontend program intentionally excludes Node types.
 import { webcrypto } from 'node:crypto'
@@ -9,6 +9,7 @@ import { NativePostConnection, NativePostPage } from '../../pages/native-post/Na
 import { admitReview } from './nativePostAdmission'
 import { candidate, makeReview, rendererPin, syntheticApi } from '../../../native-post-harness/fixture'
 
+const { act } = React
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 vi.stubGlobal('crypto', webcrypto)
 const flush = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) }) }
@@ -18,7 +19,7 @@ beforeEach(() => { container = document.createElement('div'); document.body.appe
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllEnvs() })
 const click = async (label: string) => {
   const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes(label))
-  expect(button, label).toBeTruthy(); expect(button!.disabled, label).toBe(false)
+  expect(button).toBeTruthy(); expect(button!.disabled).toBe(false)
   await act(async () => button!.click()); await flush()
 }
 const mount = async (mode = 'success') => {
@@ -157,12 +158,12 @@ describe('independent UI adversaries', () => {
     if (key === 'humanVersion') r.humanVersion = 99 as never
     else if (key === 'rendererVersion') r.evidence.rendererVersion = 99 as never
     else r.evidence.contractDigest = 'f'.repeat(64)
-    await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow()
+    await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow(key === 'contractDigest' ? 'Unsupported or expired review' : 'Native review unavailable: unsupported or over limit')
   })
   it('oversized effect refuses before any JSON.parse call', async () => {
     const r = await makeReview(); r.view.effectJSON = ' '.repeat(524289)
     const spy = vi.spyOn(JSON, 'parse')
-    try { await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow(); expect(spy).not.toHaveBeenCalled() } finally { spy.mockRestore() }
+    try { await expect(admitReview(r, rendererPin, candidate)).rejects.toThrow('Native review unavailable: unsupported or over limit'); expect(spy).not.toHaveBeenCalled() } finally { spy.mockRestore() }
   })
   it('retired session lookup cannot paint a receipt into a replacement panel', async () => {
     const f = await mount('lost-reply'); await review(); await click('Confirm exact Post once')

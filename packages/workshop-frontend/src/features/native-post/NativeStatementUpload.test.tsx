@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import React from 'react'
+import type { extractNativeStatement } from 'virtual:native-statement-reader'
+import type { NativePostSession } from '@gadgets/workshop-shared/native-post-integration'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NativeStatementUpload } from './NativeStatementUpload'
@@ -8,7 +10,8 @@ import { nativeStatementSource } from './nativeStatementSource'
 import { candidate, rendererPin, syntheticApi } from '../../../native-post-harness/fixture'
 import type { NativeCaptureDetail } from '@gadgets/workshop-shared/os-native-post.generated'
 
-const reader = vi.hoisted(() => vi.fn())
+const { act } = React
+const reader = vi.hoisted(() => vi.fn<typeof extractNativeStatement>())
 vi.mock('virtual:native-statement-reader', () => ({ available: true, extractNativeStatement: reader }))
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 const evidence = () => ({ pageCount: 2, textLayer: 'present' as const, pages: [1, 2].map(page => ({ page, text: `Public page ${page}`, image: 'data:image/jpeg;base64,public-fixture' })) })
@@ -20,7 +23,7 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.useRealTimers() })
 const click = async (label: string) => {
   const button = [...container.querySelectorAll('button')].find(node => node.textContent?.includes(label))!
-  expect(button, label).toBeTruthy(); expect(button.disabled, label).toBe(false)
+  expect(button).toBeTruthy(); expect(button.disabled).toBe(false)
   await act(async () => button.click())
 }
 const choose = async () => {
@@ -36,8 +39,8 @@ const panel = async () => {
   const original = (await f.methods.getCapture()).value
   const stored: NativeCaptureDetail = { ...original, draft: null, summary: { ...original.summary, draftRevision: 0, phase: 'stored' } }
   const processing: NativeCaptureDetail = { ...stored, activeAttempt: { id: stored.summary.id, revision: 2, sourceRevision: 1, epoch: 1, attempt: 'public-attempt', deadline: Date.now() + 180000 }, summary: { ...stored.summary, revision: 2, phase: 'processing' } }
-  const add = vi.fn(async () => ({ ok: true as const, value: stored }))
-  const process = vi.fn(async () => ({ ok: true as const, value: processing }))
+  const add = vi.fn<NativePostSession['addStatement']>(async () => ({ ok: true as const, value: stored }))
+  const process = vi.fn<NativePostSession['processStatement']>(async () => ({ ok: true as const, value: processing }))
   const stop = vi.spyOn(f.methods, 'stopCapture')
   Object.assign(f.methods, { addStatement: add, processStatement: process })
   const get = vi.spyOn(f.methods, 'getCapture').mockResolvedValue({ ok: true, value: processing })
@@ -48,7 +51,7 @@ const panel = async () => {
 
 describe('native text-only statement upload', () => {
   it('requires opt-in and separate read/admit clicks; keeps password and images out of admission', async () => {
-    const admit = vi.fn()
+    const admit = vi.fn<(input: Parameters<NativePostSession['addStatement']>[0]) => Promise<void>>()
     await act(async () => root.render(<NativeStatementUpload disabled={false} onAdmit={admit} />))
     await choose()
     expect([...container.querySelectorAll('button')].find(b => b.textContent === 'Read PDF locally')!.disabled).toBe(true)
@@ -69,7 +72,7 @@ describe('native text-only statement upload', () => {
   it.each(['Cancel local reading', 'replacement', 'unmount'])('aborts reader on %s and fences a late read', async action => {
     let finish!: (value: ReturnType<typeof evidence>) => void
     reader.mockReturnValue(new Promise(resolve => { finish = resolve }))
-    const admit = vi.fn()
+    const admit = vi.fn<(input: Parameters<NativePostSession['addStatement']>[0]) => Promise<void>>()
     await act(async () => root.render(<NativeStatementUpload disabled={false} onAdmit={admit} />))
     await optIn(); await choose(); await click('Read PDF locally')
     const signal = reader.mock.calls[0][1].signal as AbortSignal
@@ -82,19 +85,19 @@ describe('native text-only statement upload', () => {
     expect(container.textContent).not.toContain('2 pages read')
   })
   it('refuses image-only, partial, missing, misnumbered and over-limit evidence without truncation', () => {
-    for (const textLayer of ['image_only', 'partial'] as const) expect(() => nativeStatementSource('Public.pdf', { ...evidence(), textLayer })).toThrow()
-    expect(() => nativeStatementSource('Public.pdf', { ...evidence(), pageCount: 16 })).toThrow()
-    expect(() => nativeStatementSource('Public.pdf', { ...evidence(), pages: evidence().pages.slice(1) })).toThrow()
-    expect(() => nativeStatementSource('Public.pdf', { ...evidence(), pages: [{ page: 1, text: ' ', image: '' }, evidence().pages[1]] })).toThrow()
-    expect(() => nativeStatementSource('Public.pdf', { ...evidence(), pages: evidence().pages.reverse() })).toThrow()
+    for (const textLayer of ['image_only', 'partial'] as const) expect(() => nativeStatementSource('Public.pdf', { ...evidence(), textLayer })).toThrow('Unsupported statement coverage')
+    expect(() => nativeStatementSource('Public.pdf', { ...evidence(), pageCount: 16 })).toThrow('Unsupported statement coverage')
+    expect(() => nativeStatementSource('Public.pdf', { ...evidence(), pages: evidence().pages.slice(1) })).toThrow('Unsupported statement coverage')
+    expect(() => nativeStatementSource('Public.pdf', { ...evidence(), pages: [{ page: 1, text: ' ', image: '' }, evidence().pages[1]] })).toThrow('Incomplete page text')
+    expect(() => nativeStatementSource('Public.pdf', { ...evidence(), pages: evidence().pages.toReversed() })).toThrow('Incomplete page text')
     const single = { pageCount: 1, textLayer: 'present' as const, pages: [{ page: 1, text: 'é'.repeat(65536), image: '' }] }
     expect(nativeStatementSource('Public.pdf', single).source.pages[0].text).toHaveLength(65536)
     single.pages[0].text += 'a'
-    expect(() => nativeStatementSource('Public.pdf', single)).toThrow()
+    expect(() => nativeStatementSource('Public.pdf', single)).toThrow('Statement text exceeds 131072 UTF-8 bytes')
   })
   it('reports password failures without leaking parser messages and waits for explicit retry', async () => {
     reader.mockRejectedValue({ detail: { kind: 'wrong_password' }, message: 'DO NOT DISPLAY' })
-    await act(async () => root.render(<NativeStatementUpload disabled={false} onAdmit={vi.fn()} />))
+    await act(async () => root.render(<NativeStatementUpload disabled={false} onAdmit={vi.fn<(input: Parameters<NativePostSession['addStatement']>[0]) => Promise<void>>()} />))
     await optIn(); await choose(); await click('Read PDF locally'); await tick(20000)
     expect(container.textContent).toContain('PDF password required or incorrect')
     expect(container.textContent).not.toContain('DO NOT DISPLAY'); expect(reader).toHaveBeenCalledTimes(1)
@@ -165,7 +168,7 @@ describe('connected native processing and existing Post controls', () => {
     await click('Stop capture'); expect(f.stop).toHaveBeenCalledTimes(1)
   })
   it('lost admission reply freezes new mutations and never retries the admission', async () => {
-    const f = syntheticApi(); const add = vi.fn(async () => { throw Error('lost') })
+    const f = syntheticApi(); const add = vi.fn<NativePostSession['addStatement']>(async () => { throw Error('lost') })
     Object.assign(f.methods, { addStatement: add })
     await act(async () => root.render(<NativePostPanel {...f} candidate={candidate} rendererPin={rendererPin} />))
     await optIn(); await choose(); await click('Read PDF locally'); await click('Admit text source'); await tick(130000)
