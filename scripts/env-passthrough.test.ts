@@ -33,6 +33,8 @@ import { describe, it } from "node:test";
  *               task sets `NODE_ENV` before importing Vite.
  *   external  — read outside any vp task (release/dev tooling invoked directly), so vp never
  *               filters it.
+ *   testOnly  — read only by explicitly invoked acceptance-test configs or browser harnesses,
+ *               outside cached build/default test tasks; never an exemption for a build input.
  */
 interface ExpectedArea {
   /** Matched by an `env` pattern on the task that reads it. */
@@ -45,6 +47,8 @@ interface ExpectedArea {
   injected?: string[];
   /** Read outside any vp task. */
   external?: string[];
+  /** Read only by explicitly invoked acceptance-test configs or browser harnesses. */
+  testOnly?: string[];
 }
 
 const EXPECTED: Record<string, ExpectedArea> = {
@@ -70,15 +74,25 @@ const EXPECTED: Record<string, ExpectedArea> = {
       "VITE_BACKEND_HOST",
       "VITE_BASE_PATH",
       "VITE_CF_ACCESS_MODE",
+      "VITE_DEPLOYMENT_INSTALL_OFFERING",
       "VITE_DEV_AUTO_LOGIN",
       "VITE_DEV_PASSWORD",
       "VITE_DEV_USERNAME",
       "VITE_FRONTEND_ERROR_REPORTING",
+      "VITE_MANAGED_LEDGER_EXPORT_PATH",
       "VITE_MILESVAULT_AUTH_MODE",
+      "VITE_NATIVE_POST_HUMAN_V2",
+      "VITE_NATIVE_POST_RENDERER_ARTIFACT_DIGEST",
+      // Also disables bundle caching when set: the external reader's contents can change.
+      "VITE_NATIVE_STATEMENT_READER_PATH",
     ],
     injected: ["NODE_ENV"],
+    // native-post-harness/browser.mjs is invoked directly, never by a build task.
+    testOnly: ["CHROMIUM_EXECUTABLE_PATH", "PLAYWRIGHT_MODULE", "SCREENSHOT_DIR"],
   },
   "packages/workshop-backend": {
+    // Explicit paired/native acceptance configs only; not the default build or test task.
+    testOnly: ["MILESVAULT_CANONICAL_ROOT"],
     uncached: [
       "FORMAT_BLUEPRINTS_DIR",
     ],
@@ -112,7 +126,7 @@ const EXPECTED: Record<string, ExpectedArea> = {
  * exempting those variables from the check that their task declares them. Verified: before this
  * guard existed, that typo left all three assertions green.
  */
-const CATEGORIES = new Set(["forwarded", "uncached", "injected", "external", "watch"]);
+const CATEGORIES = new Set(["forwarded", "uncached", "injected", "external", "watch", "testOnly"]);
 
 const SKIP = /node_modules|__tests__|\.test\.|\.wrangler|[/\\](dist|dist-app|generated)[/\\]/;
 // Vite's own compile-time constants, not process environment.

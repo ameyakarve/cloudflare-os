@@ -1126,6 +1126,18 @@
             "LedgerHoldingsGatekeeper"
           ],
           "tag": "v4"
+        },
+        {
+          "new_sqlite_classes": [
+            "VaultReadGatekeeper"
+          ],
+          "tag": "v5"
+        },
+        {
+          "new_sqlite_classes": [
+            "DoctorReadGatekeeper"
+          ],
+          "tag": "v6"
         }
       ],
       "modules": [
