@@ -11936,11 +11936,13 @@ export class GatekeeperLoopback extends WorkerEntrypoint<Cloudflare.Env, Gatekee
    */
   dummyMethodToWorkAroundValidatorBug() {}
 
-  // Explicit forwarding for the deployment's curated gatekeepers. Workerd currently derives a
-  // WorkerEntrypoint service binding's callable RPC surface from declared methods before the
-  // constructor-returned Proxy can supply dynamic properties. Without these declarations the
-  // generated execute-code env receives a Fetcher, but calls such as env.BOOKS.searchLedger() and
-  // env.AFFILIATE.getOverview() fail with "Illegal invocation".
+  /**
+   * Explicit forwarding for the deployment's curated gatekeepers. Workerd currently derives a
+   * WorkerEntrypoint service binding's callable RPC surface from declared methods before the
+   * constructor-returned Proxy can supply dynamic properties. Without these declarations the
+   * generated execute-code env receives a Fetcher, but calls such as env.BOOKS.searchLedger() and
+   * env.AFFILIATE.getOverview() fail with "Illegal invocation".
+   */
   getOrganization(...args: any[]): Promise<any> {
     return this.session.getOrganization(...args);
   }
