@@ -1,6 +1,6 @@
 /** GENERATED ONLY by M/scripts/generate-os-native-post-contract.mjs. No authority.
- * Contract sha256:0d148981c776e566d1132909523a1b0fcde4839c80432426c25393f3c7c700cb
- * package.json sha256:7d4b33ede9d32c6ff790269242b0feb9b542b78ecaffaabb7c58ca2e5594ae96
+ * Contract sha256:f4e578b9341cdee10290237596f281659835ea7534901e7cc9f5fa6fe32e967d
+ * package.json sha256:9487ea9daf27c9be0785c43f23313958bb5901d6eb1505c3328c72f173113fb5
  * pnpm-lock.yaml sha256:259507bf9e5bc30fb2d70edbd90c021eab2f1981c786c6fc8b2d4a6f6150177d
  * scripts/generate-os-native-post-contract.mjs sha256:fa014f1c70e2d76b1fdcb8979f865c97b8501f802be1103f5a78d9340637199f
  * scripts/inject-do.mjs sha256:4bfb6dfece71dc914fe1cea9ffa28e742c39b782b159eb63563e1ff763e169d5
