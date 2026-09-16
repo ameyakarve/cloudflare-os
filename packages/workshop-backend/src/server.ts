@@ -2,7 +2,7 @@ import { newWorkersRpcResponse } from "./rpc-session.js";
 import {NativePostRootLifetime, acquireNativePostContext, nativePostEnvelope} from './native-post-human.js';
 import type {NativePostOwnerCandidate} from '@gadgets/workshop-shared/deployment-native-post';
 import type {NativePostSession} from '@gadgets/workshop-shared/native-post-integration';
-import {NATIVE_POST_CONTRACT_DIGEST, NATIVE_HUMAN_VERSIONS_CURRENT} from '../../workshop-shared/src/os-native-post-schema.generated.js';
+import {NATIVE_POST_CONTRACT_DIGEST, NATIVE_HUMAN_VERSIONS_CURRENT} from '@gadgets/workshop-shared/os-native-post-schema.generated';
 import { deploymentAccessEnabled, DeploymentAccessError, readDeploymentAccess, watchDeploymentAccess } from "./deployment-access.js";
 import { RpcStub, RpcTarget } from "capnweb";
 import { validateRpc, skipRpcValidation } from "capnweb-validate";

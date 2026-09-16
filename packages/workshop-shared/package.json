@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "exports": {
+    "./os-native-post-schema.generated": {
+      "types": "./src/os-native-post-schema.generated.ts",
+      "import": "./src/os-native-post-schema.generated.ts"
+    },
     "./api": {
       "types": "./src/api.ts",
       "import": "./src/api.ts"
