@@ -21,7 +21,7 @@ afterEach(() => { act(() => root.unmount()); container.remove() })
 const click = async (label: string) => {
   const button = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes(label))!
   expect(button).toBeTruthy(); expect(button.disabled).toBe(false)
-  await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 40)) })
+  await act(async () => { button.click() })
 }
 
 describe('closing-capable current review (synthetic wire/UI proof only)', () => {
@@ -71,7 +71,11 @@ describe('closing-capable current review (synthetic wire/UI proof only)', () => 
     await click('Prepare selected'); expect(confirm).not.toHaveBeenCalled()
     expect(container.textContent).not.toContain('Confirm exact Post once')
     await click('Open complete Review'); expect(confirm).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('Closing pad + balance assertion (not a transaction)')
+    // Review admission awaits real WebCrypto digests; act does not await that detached work.
+    await vi.waitFor(async () => {
+      await act(async () => {})
+      expect(container.textContent).toContain('Closing pad + balance assertion (not a transaction)')
+    })
     await click('Confirm exact Post once'); expect(confirm).toHaveBeenCalledTimes(1)
     expect(container.textContent).toContain('1 selected draft items posted; 1 remain')
     expect(container.textContent).toContain('Selected item counts include closing assertions when present; transaction counts do not.')
