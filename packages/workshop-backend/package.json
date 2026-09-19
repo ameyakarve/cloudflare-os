@@ -51,6 +51,7 @@
     "@types/pako": "^2.0.4",
     "dompurify": "^3.4.13",
     "esbuild": "^0.28.1",
+    "pdfjs-dist": "5.4.149",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "topojson-client": "^3.1.0",

@@ -2,6 +2,7 @@ import KUMO_RUNTIME from "./generated/gadget-kumo-runtime.txt";
 import KUMO_STYLES from "./generated/gadget-kumo-styles.txt";
 import GRAPH_RUNTIME from "./generated/gadget-graph-runtime.txt";
 import GEO_RUNTIME from "./generated/gadget-geo-runtime.txt";
+import PDF_RUNTIME from "./generated/gadget-pdf-runtime.txt";
 import { withGadgetKumoRuntime as withLegacyKumo } from "./gadget-kumo-legacy";
 
 const LEGACY_KUMO_CLIENT = /^\s*const\s*\{[^}]*\b(?:page|hero|card|notice|loading)\b[^}]*\}\s*=\s*Kumo\s*;/m;
@@ -36,12 +37,13 @@ export function withGadgetKumo(clientCode: string): string {
   const styles = JSON.stringify(KUMO_STYLES);
   const graphRuntime = clientCode.includes("GadgetGraph") ? `${GRAPH_RUNTIME}\n` : "";
   const geoRuntime = clientCode.includes("GadgetGeo") ? `${GEO_RUNTIME}\n` : "";
+  const pdfRuntime = clientCode.includes("GadgetPDF") ? `${PDF_RUNTIME}\n` : "";
   return `(() => {\n` +
     `  const style = document.createElement("style");\n` +
     `  style.dataset.kumo = "paper-default";\n` +
     `  style.textContent = ${styles};\n` +
     `  document.head.append(style);\n` +
-    `})();\n${KUMO_RUNTIME}\n${graphRuntime}${geoRuntime}${clientCode}`;
+    `})();\n${KUMO_RUNTIME}\n${graphRuntime}${geoRuntime}${pdfRuntime}${clientCode}`;
 }
 
-export { GEO_RUNTIME, GRAPH_RUNTIME, KUMO_RUNTIME, KUMO_STYLES };
+export { GEO_RUNTIME, GRAPH_RUNTIME, KUMO_RUNTIME, KUMO_STYLES, PDF_RUNTIME };

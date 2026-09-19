@@ -11,6 +11,7 @@ const kumoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-kumo-run
 const kumoStylesOutputFile = resolve(packageDir, "src/generated/gadget-kumo-styles.txt");
 const graphRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-graph-runtime.txt");
 const geoRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-geo-runtime.txt");
+const pdfRuntimeOutputFile = resolve(packageDir, "src/generated/gadget-pdf-runtime.txt");
 
 const runtimeResult = await build({
   entryPoints: [resolve(packageDir, "browser/browser-export-runtime.ts")],
@@ -67,9 +68,19 @@ const geoRuntimeResult = await build({
   minify: true,
   write: false,
 });
+const pdfRuntimeResult = await build({
+  entryPoints: [resolve(packageDir, "browser/gadget-pdf-runtime.ts")],
+  bundle: true,
+  format: "iife",
+  platform: "browser",
+  target: "es2025",
+  minify: true,
+  write: false,
+});
 const kumoRuntimeBytes = kumoRuntimeResult.outputFiles[0].contents;
 const graphRuntimeBytes = graphRuntimeResult.outputFiles[0].contents;
 const geoRuntimeBytes = geoRuntimeResult.outputFiles[0].contents;
+const pdfRuntimeBytes = pdfRuntimeResult.outputFiles[0].contents;
 // Bundle the actual upstream stylesheet and SDK defaults, including the local Inter font.
 // No deploy-time CSS rewriting: cascade layers are reviewable source.
 const cssOptions = {
@@ -98,6 +109,8 @@ assertContains(graphRuntimeBytes, ".GadgetGraph=Object.freeze", "Gadget graph ru
 assertContains(graphRuntimeBytes, "layoutDirected", "Gadget graph runtime");
 assertContains(geoRuntimeBytes, ".GadgetGeo=Object.freeze", "Gadget geo runtime");
 assertContains(geoRuntimeBytes, "RouteGlobe:", "Gadget geo runtime");
+assertContains(pdfRuntimeBytes, ".GadgetPDF=Object.freeze", "Gadget PDF runtime");
+assertContains(pdfRuntimeBytes, "PasswordResponses:", "Gadget PDF runtime");
 assertContains(kumoStylesBytes, "--color-kumo-brand", "Kumo standalone styles");
 assertContains(kumoStylesBytes, ".bg-kumo-base", "Kumo standalone styles");
 writeIfChanged(runtimeOutputFile, runtimeResult.outputFiles[0].contents);
@@ -106,6 +119,7 @@ writeIfChanged(pageOutputFile, pageResult.outputFiles[0].contents);
 writeIfChanged(kumoRuntimeOutputFile, kumoRuntimeBytes);
 writeIfChanged(graphRuntimeOutputFile, graphRuntimeBytes);
 writeIfChanged(geoRuntimeOutputFile, geoRuntimeBytes);
+writeIfChanged(pdfRuntimeOutputFile, pdfRuntimeBytes);
 writeIfChanged(kumoStylesOutputFile, kumoStylesBytes);
 
 function assertContains(bytes, marker, label) {

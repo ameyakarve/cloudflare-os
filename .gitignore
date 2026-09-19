@@ -51,5 +51,6 @@ packages/workshop-backend/src/generated/gadget-kumo-styles.txt
 packages/workshop-backend/src/generated/gadget-kumo-legacy-styles.txt
 packages/workshop-backend/src/generated/gadget-graph-runtime.txt
 packages/workshop-backend/src/generated/gadget-geo-runtime.txt
+packages/workshop-backend/src/generated/gadget-pdf-runtime.txt
 packages/workshop-backend/src/generated/gadget-client-upgrade.txt
 packages/workshop-backend/src/generated/ledger-client-upgrade.txt
