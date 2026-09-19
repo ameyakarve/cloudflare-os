@@ -1,4 +1,4 @@
-import { getDocument as pdfGetDocument, PasswordResponses } from "pdfjs-dist/build/pdf.mjs";
+import { getDocument as pdfGetDocument, PasswordResponses } from "pdfjs-dist";
 import { WorkerMessageHandler } from "pdfjs-dist/build/pdf.worker.mjs";
 
 // Gadget frames cannot load worker scripts: they have an opaque origin, no network access, and
